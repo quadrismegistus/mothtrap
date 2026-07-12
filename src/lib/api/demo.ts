@@ -28,6 +28,7 @@ interface Spec {
   repostBy?: number
   link?: string
   image?: string
+  quote?: { ai: number; text: string }
 }
 
 const DEMO_IMG =
@@ -88,6 +89,20 @@ function make(s: Spec): FeedItem {
       images: [{ thumb: s.image, fullsize: s.image, alt: 'demo image' }],
     }
   }
+  if (s.quote) {
+    const [qh, qn] = AUTHORS[s.quote.ai]
+    ;(item.post as Record<string, unknown>).embed = {
+      $type: 'app.bsky.embed.record#view',
+      record: {
+        $type: 'app.bsky.embed.record#viewRecord',
+        uri: `at://did:plc:${qh}/app.bsky.feed.post/quoted-${s.id}`,
+        cid: `cid-quoted-${s.id}`,
+        author: { did: `did:plc:${qh}`, handle: qh, displayName: qn },
+        value: { $type: 'app.bsky.feed.post', text: s.quote.text, createdAt: created },
+        indexedAt: created,
+      },
+    }
+  }
   return item as unknown as FeedItem
 }
 
@@ -131,6 +146,7 @@ export function demoFeed(): FeedItem[] {
   // Rich content: a link post (facets) and an image post.
   specs.push({ id: 'link', ai: 1, text: 'worth a read', link: 'https://docs.bsky.app', likes: 18, reposts: 5, replies: 2, minsAgo: 8 })
   specs.push({ id: 'img', ai: 3, text: 'a photo from today', image: DEMO_IMG, likes: 26, reposts: 7, replies: 3, minsAgo: 14 })
+  specs.push({ id: 'quote', ai: 2, text: 'exactly this — well put', quote: { ai: 5, text: 'the map beats the feed, every time' }, likes: 19, reposts: 6, replies: 1, minsAgo: 10 })
 
   // A 5-post thread rooted at t0 (tests collapsing + "+N" badge).
   const root = 'at://did:plc:alice.bsky.social/app.bsky.feed.post/t0'

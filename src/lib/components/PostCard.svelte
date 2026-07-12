@@ -1,6 +1,16 @@
 <script lang="ts">
   import type { FeedItem } from '../api/timeline'
-  import { authorName, fullDate, postFacets, postImages, postText, reposter, timeAgo } from '../api/post'
+  import {
+    authorName,
+    fullDate,
+    postFacets,
+    postImages,
+    postQuote,
+    postText,
+    reposter,
+    timeAgo,
+    type QuotedPost,
+  } from '../api/post'
   import { segments } from '../api/richtext'
   import { interactions } from '../state/interactions.svelte'
 
@@ -21,6 +31,11 @@
   const reposted = $derived(interactions.reposted(item))
   const textSegs = $derived(segments(postText(item), postFacets(item)))
   const images = $derived(postImages(item))
+  const quoted = $derived(postQuote(item))
+
+  function quoteUrl(q: QuotedPost): string {
+    return `https://bsky.app/profile/${q.handle}/post/${q.uri.split('/').pop()}`
+  }
 
   let repostMenu = $state(false)
 
@@ -67,6 +82,23 @@
         <img src={img.thumb} alt={img.alt} title={img.alt} />
       {/each}
     </div>
+  {/if}
+
+  {#if quoted}
+    <a
+      class="quoted"
+      href={quoteUrl(quoted)}
+      target="_blank"
+      rel="noreferrer"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <div class="q-head">
+        {#if quoted.avatar}<img class="q-avatar" src={quoted.avatar} alt="" />{/if}
+        <span class="q-name">{quoted.name}</span>
+        <span class="q-handle">@{quoted.handle}</span>
+      </div>
+      <p class="q-text">{quoted.text}</p>
+    </a>
   {/if}
 
   <div class="actions">
@@ -202,6 +234,48 @@
     max-height: 160px;
     object-fit: cover;
     display: block;
+  }
+  .quoted {
+    display: block;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.5rem 0.6rem;
+    margin-bottom: 0.5rem;
+    color: inherit;
+    text-decoration: none;
+  }
+  .quoted:hover {
+    border-color: var(--accent);
+    text-decoration: none;
+  }
+  .q-head {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-bottom: 0.2rem;
+  }
+  .q-avatar {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    object-fit: cover;
+  }
+  .q-name {
+    font-weight: 600;
+    font-size: 0.8rem;
+  }
+  .q-handle {
+    color: var(--text-dim);
+    font-size: 0.75rem;
+  }
+  .q-text {
+    margin: 0;
+    font-size: 0.82rem;
+    line-height: 1.35;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 4.5em;
+    overflow: hidden;
   }
   .actions {
     display: flex;

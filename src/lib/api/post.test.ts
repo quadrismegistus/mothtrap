@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkPost } from '../testing'
-import { authorName, bskyUrl, postText, reposter, timeAgo } from './post'
+import { authorName, bskyUrl, postImages, postQuote, postText, reposter, timeAgo } from './post'
+import type { FeedItem } from './timeline'
 
 describe('post helpers', () => {
   it('postText reads the record text', () => {
@@ -20,6 +21,48 @@ describe('post helpers', () => {
   it('bskyUrl builds a profile/post web link', () => {
     const item = mkPost({ uri: 'at://did:plc:x/app.bsky.feed.post/abc', author: 'al.test' })
     expect(bskyUrl(item)).toBe('https://bsky.app/profile/al.test/post/abc')
+  })
+})
+
+describe('embeds', () => {
+  it('postImages reads image thumbnails', () => {
+    const item = {
+      post: {
+        embed: {
+          $type: 'app.bsky.embed.images#view',
+          images: [
+            { thumb: 't1', alt: 'a' },
+            { thumb: 't2', alt: 'b' },
+          ],
+        },
+      },
+    } as unknown as FeedItem
+    expect(postImages(item).map((i) => i.thumb)).toEqual(['t1', 't2'])
+  })
+
+  it('postQuote reads the quoted record', () => {
+    const item = {
+      post: {
+        embed: {
+          $type: 'app.bsky.embed.record#view',
+          record: {
+            $type: 'app.bsky.embed.record#viewRecord',
+            uri: 'at://x/1',
+            author: { handle: 'a.test', displayName: 'A' },
+            value: { $type: 'app.bsky.feed.post', text: 'quoted' },
+          },
+        },
+      },
+    } as unknown as FeedItem
+    const q = postQuote(item)
+    expect(q?.text).toBe('quoted')
+    expect(q?.name).toBe('A')
+    expect(q?.handle).toBe('a.test')
+  })
+
+  it('are empty/null with no embed', () => {
+    expect(postImages(mkPost())).toEqual([])
+    expect(postQuote(mkPost())).toBeNull()
   })
 })
 

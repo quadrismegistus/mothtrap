@@ -1,5 +1,6 @@
 import {
   AppBskyEmbedImages,
+  AppBskyEmbedRecord,
   AppBskyEmbedRecordWithMedia,
   AppBskyFeedPost,
 } from '@atproto/api'
@@ -30,6 +31,37 @@ export function postImages(item: FeedItem): PostImage[] {
     return view.images.map((i) => ({ thumb: i.thumb, alt: i.alt }))
   }
   return []
+}
+
+export interface QuotedPost {
+  uri: string
+  name: string
+  handle: string
+  text: string
+  avatar?: string
+}
+
+/** The post quoted by this one (record embed or record-with-media), if any. */
+export function postQuote(item: FeedItem): QuotedPost | null {
+  const embed = item.post.embed
+  let inner: unknown = null
+  if (AppBskyEmbedRecord.isView(embed)) inner = embed.record
+  else if (AppBskyEmbedRecordWithMedia.isView(embed) && AppBskyEmbedRecord.isView(embed.record)) {
+    inner = embed.record.record
+  }
+  if (AppBskyEmbedRecord.isViewRecord(inner)) {
+    const author = inner.author
+    const value = inner.value
+    const text = AppBskyFeedPost.isRecord(value) ? value.text : ''
+    return {
+      uri: inner.uri,
+      name: author.displayName || author.handle,
+      handle: author.handle,
+      text,
+      avatar: author.avatar,
+    }
+  }
+  return null
 }
 
 /** Display name of the reposter, if this feed item is a repost. */
