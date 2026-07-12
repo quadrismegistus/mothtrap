@@ -172,10 +172,9 @@ jQuery-UI + socket.io + vis-network.
    an opt-in auto-cycle (rotates the queued overflow through over time — replaced the
    awkward prominent play button); keyboard `R` load more, `N` next batch, `L` back to
    top, `D` dismiss, `Esc` close.
-4. **Threads** — *not yet.* So far threads are only collapsed/expanded among posts
-   already in the timeline; this milestone adds `getPostThread` to pull in replies we
-   *don't* have (fetch the full conversation on demand), plus read/unread styling and
-   reply-count badges.
+4. **Threads** ✅ (core) — expanding a collapsed thread now calls `getPostThread` to pull
+   in the full conversation (replies not in the timeline), flattened and merged into the
+   graph. Still could add: read/unread styling and richer reply-count badges.
 5. **Live + polish** — done early: **OAuth login**, **deployed** to GitHub Pages at
    ryanheuser.com/skynets/, **open-in-bsky.app** on double-click. Still to do: 60s poll
    loop (or Jetstream) for live updates, scoring options (e.g. follower-weighting).

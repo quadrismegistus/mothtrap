@@ -13,6 +13,7 @@
   import { read } from '../state/read.svelte'
   import { settings } from '../state/settings.svelte'
   import { compose } from '../state/compose.svelte'
+  import { threads } from '../state/threads.svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import PostNode from './PostNode.svelte'
   import PostCard from './PostCard.svelte'
@@ -47,7 +48,7 @@
 
   // Merge optimistically-posted items (our own new posts/replies) with the feed,
   // then drop dismissed ones. buildGraph dedupes by uri.
-  const allItems = $derived([...compose.injected, ...items])
+  const allItems = $derived([...compose.injected, ...threads.posts, ...items])
   const visible = $derived(allItems.filter((i) => !read.isDismissed(i.post.uri)))
   const graph = $derived(buildGraph(visible, expanded))
 
@@ -186,8 +187,13 @@
   }
 
   function toggleThread(node: GraphNode) {
-    if (expanded.has(node.rootUri)) expanded.delete(node.rootUri)
-    else expanded.add(node.rootUri)
+    if (expanded.has(node.rootUri)) {
+      expanded.delete(node.rootUri)
+    } else {
+      expanded.add(node.rootUri)
+      // Pull the full conversation so replies not in the timeline appear too.
+      threads.ensure(node.rootUri)
+    }
   }
 
   function dismiss(uri: string) {
