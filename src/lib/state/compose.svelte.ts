@@ -2,11 +2,14 @@ import { AppBskyFeedPost } from '@atproto/api'
 import type { FeedItem } from '../api/timeline'
 import { session } from './session.svelte'
 
-export interface ReplyTarget {
+export interface ReplyRef {
   uri: string
   cid: string
   rootUri: string
   rootCid: string
+}
+
+export interface ReplyTarget extends ReplyRef {
   item: FeedItem
 }
 
@@ -29,7 +32,7 @@ export function buildSelfPost(
   text: string,
   uri: string,
   cid: string,
-  reply: ReplyTarget | null,
+  reply: ReplyRef | null,
   images: PreviewImage[] = [],
 ): FeedItem {
   const createdAt = new Date().toISOString()

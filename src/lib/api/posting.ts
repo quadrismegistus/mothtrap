@@ -1,10 +1,12 @@
 import { getAgent } from './agent'
 import { isDemo } from './demo'
-import type { ReplyTarget } from '../state/compose.svelte'
+import type { ReplyRef } from '../state/compose.svelte'
 import type { UploadedImage } from './upload'
 
 /** Max post length in graphemes (Bluesky's limit). */
 export const MAX_GRAPHEMES = 300
+
+let demoCounter = 0
 
 export function graphemeLength(text: string): number {
   if (typeof Intl !== 'undefined' && 'Segmenter' in Intl) {
@@ -24,13 +26,13 @@ export interface QuoteTarget {
 
 export async function createPost(
   text: string,
-  reply: ReplyTarget | null,
+  reply: ReplyRef | null,
   quote: QuoteTarget | null = null,
   facets?: unknown[],
   images: UploadedImage[] = [],
 ): Promise<{ uri: string; cid: string }> {
   if (isDemo()) {
-    const id = `${Date.now()}`
+    const id = `${Date.now()}-${++demoCounter}`
     return { uri: `at://did:plc:demo/app.bsky.feed.post/${id}`, cid: `demo-${id}` }
   }
   const record: { text: string; reply?: unknown; embed?: unknown; facets?: unknown[] } = { text }

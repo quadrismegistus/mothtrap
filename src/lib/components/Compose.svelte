@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { compose, buildSelfPost } from '../state/compose.svelte'
+  import { compose, buildSelfPost, type ReplyRef } from '../state/compose.svelte'
   import { createPost, graphemeLength, MAX_GRAPHEMES } from '../api/posting'
   import { uploadImage } from '../api/upload'
   import { detectFacets } from '../api/richtext'
@@ -12,47 +12,60 @@
     url: string
     alt: string
   }
+  interface Segment {
+    text: string
+    attached: Attached[]
+  }
 
-  let text = $state('')
-  let attached = $state<Attached[]>([])
+  let segments = $state<Segment[]>([{ text: '', attached: [] }])
   let posting = $state(false)
   let error = $state<string | undefined>(undefined)
-  let textarea = $state<HTMLTextAreaElement | undefined>(undefined)
-  let fileInput = $state<HTMLInputElement | undefined>(undefined)
+  let dialog = $state<HTMLElement | undefined>(undefined)
+  let fileInputs: Record<number, HTMLInputElement | undefined> = {}
 
-  // Reset each time the modal opens, and focus the textarea.
   $effect(() => {
     if (compose.open) {
-      text = ''
-      attached = []
+      segments = [{ text: '', attached: [] }]
       error = undefined
-      queueMicrotask(() => textarea?.focus())
+      queueMicrotask(() => dialog?.querySelector('textarea')?.focus())
     }
   })
 
-  const count = $derived(graphemeLength(text))
-  const remaining = $derived(MAX_GRAPHEMES - count)
+  const isThread = $derived(segments.length > 1)
   const canPost = $derived(
-    (text.trim().length > 0 || attached.length > 0) && remaining >= 0 && !posting,
+    !posting &&
+      segments.every(
+        (s) =>
+          (s.text.trim().length > 0 || s.attached.length > 0) &&
+          graphemeLength(s.text) <= MAX_GRAPHEMES,
+      ),
   )
 
-  function onFiles(e: Event) {
-    const input = e.target as HTMLInputElement
-    for (const f of Array.from(input.files ?? [])) {
-      if (attached.length >= MAX_IMAGES) break
-      if (!f.type.startsWith('image/')) continue
-      attached = [...attached, { file: f, url: URL.createObjectURL(f), alt: '' }]
-    }
-    input.value = '' // allow re-picking the same file
+  function addSegment() {
+    segments = [...segments, { text: '', attached: [] }]
+  }
+  function removeSegment(i: number) {
+    for (const a of segments[i].attached) URL.revokeObjectURL(a.url)
+    segments = segments.filter((_, idx) => idx !== i)
   }
 
-  function removeImage(i: number) {
-    URL.revokeObjectURL(attached[i].url)
-    attached = attached.filter((_, idx) => idx !== i)
+  function onFiles(i: number, e: Event) {
+    const input = e.target as HTMLInputElement
+    const seg = segments[i]
+    for (const f of Array.from(input.files ?? [])) {
+      if (seg.attached.length >= MAX_IMAGES) break
+      if (!f.type.startsWith('image/')) continue
+      seg.attached = [...seg.attached, { file: f, url: URL.createObjectURL(f), alt: '' }]
+    }
+    input.value = ''
+  }
+  function removeImage(i: number, j: number) {
+    URL.revokeObjectURL(segments[i].attached[j].url)
+    segments[i].attached = segments[i].attached.filter((_, idx) => idx !== j)
   }
 
   function cancel() {
-    for (const a of attached) URL.revokeObjectURL(a.url)
+    for (const s of segments) for (const a of s.attached) URL.revokeObjectURL(a.url)
     compose.close()
   }
 
@@ -61,17 +74,44 @@
     posting = true
     error = undefined
     try {
-      const reply = compose.reply
-      const quote = compose.quote
+      const reply0 = compose.reply
+      const quote0 = compose.quote
         ? { uri: compose.quote.post.uri, cid: compose.quote.post.cid }
         : null
-      const facets = await detectFacets(text)
-      const uploaded = []
-      for (const a of attached) uploaded.push(await uploadImage(a.file, a.alt))
-      const { uri, cid } = await createPost(text, reply, quote, facets, uploaded)
-      const previews = attached.map((a) => ({ thumb: a.url, alt: a.alt }))
-      compose.inject(buildSelfPost(text, uri, cid, reply, previews))
-      attached = [] // URLs now referenced by the injected post; don't revoke
+      let root: { uri: string; cid: string } | null = reply0
+        ? { uri: reply0.rootUri, cid: reply0.rootCid }
+        : null
+      let parent: { uri: string; cid: string } | null = reply0
+        ? { uri: reply0.uri, cid: reply0.cid }
+        : null
+
+      const injected = []
+      for (let i = 0; i < segments.length; i++) {
+        const seg = segments[i]
+        const replyRef: ReplyRef | null =
+          i === 0
+            ? reply0
+            : { uri: parent!.uri, cid: parent!.cid, rootUri: root!.uri, rootCid: root!.cid }
+        const quote = i === 0 ? quote0 : null
+        const facets = await detectFacets(seg.text)
+        const uploaded = []
+        for (const a of seg.attached) uploaded.push(await uploadImage(a.file, a.alt))
+
+        const { uri, cid } = await createPost(seg.text, replyRef, quote, facets, uploaded)
+        if (i === 0 && !root) root = { uri, cid }
+        parent = { uri, cid }
+        injected.push(
+          buildSelfPost(
+            seg.text,
+            uri,
+            cid,
+            replyRef,
+            seg.attached.map((a) => ({ thumb: a.url, alt: a.alt })),
+          ),
+        )
+      }
+      for (const it of injected) compose.inject(it)
+      segments = [{ text: '', attached: [] }] // URLs now referenced by injected posts
       compose.close()
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to post'
@@ -87,23 +127,20 @@
 </script>
 
 {#if compose.open}
-  <div
-    class="backdrop"
-    role="button"
-    tabindex="-1"
-    onclick={() => cancel()}
-    onkeydown={onKeydown}
-  >
+  <div class="backdrop" role="button" tabindex="-1" onclick={() => cancel()} onkeydown={onKeydown}>
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div
       class="modal"
       role="dialog"
       aria-modal="true"
       tabindex="-1"
+      bind:this={dialog}
       onclick={(e) => e.stopPropagation()}
     >
       <div class="head">
-        <strong>{compose.reply ? 'Reply' : compose.quote ? 'Quote post' : 'New post'}</strong>
+        <strong>
+          {compose.reply ? 'Reply' : compose.quote ? 'Quote post' : isThread ? 'Thread' : 'New post'}
+        </strong>
         <button class="close" aria-label="Close" onclick={() => cancel()}>✕</button>
       </div>
 
@@ -114,40 +151,82 @@
         </div>
       {/if}
 
-      <textarea
-        bind:this={textarea}
-        bind:value={text}
-        onkeydown={onKeydown}
-        placeholder={compose.reply
-          ? 'Write your reply…'
-          : compose.quote
-            ? 'Add a comment…'
-            : "What's happening?"}
-        rows="5"
-      ></textarea>
+      {#each segments as seg, i (i)}
+        <div class="segment" class:threaded={isThread}>
+          {#if isThread}
+            <div class="seg-head">
+              <span class="seg-num">{i + 1}</span>
+              {#if segments.length > 1}
+                <button class="seg-remove" aria-label="Remove post" onclick={() => removeSegment(i)}
+                  >✕</button
+                >
+              {/if}
+            </div>
+          {/if}
+
+          <textarea
+            bind:value={seg.text}
+            onkeydown={onKeydown}
+            placeholder={i > 0
+              ? 'Continue the thread…'
+              : compose.reply
+                ? 'Write your reply…'
+                : compose.quote
+                  ? 'Add a comment…'
+                  : "What's happening?"}
+            rows={isThread ? 3 : 5}
+          ></textarea>
+
+          {#if seg.attached.length}
+            <div class="attachments">
+              {#each seg.attached as img, j (img.url)}
+                <div class="att">
+                  <img src={img.url} alt="" />
+                  <button
+                    class="att-remove"
+                    aria-label="Remove image"
+                    onclick={() => removeImage(i, j)}>✕</button
+                  >
+                  <input
+                    class="att-alt"
+                    placeholder="Alt text — describe the image"
+                    bind:value={seg.attached[j].alt}
+                  />
+                </div>
+              {/each}
+            </div>
+          {/if}
+
+          <div class="seg-tools">
+            <button
+              class="tool"
+              title="Add image"
+              disabled={seg.attached.length >= MAX_IMAGES}
+              onclick={() => fileInputs[i]?.click()}
+            >
+              🖼 Image
+            </button>
+            <input
+              bind:this={fileInputs[i]}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              onchange={(e) => onFiles(i, e)}
+            />
+            <span class="count" class:over={graphemeLength(seg.text) > MAX_GRAPHEMES}>
+              {MAX_GRAPHEMES - graphemeLength(seg.text)}
+            </span>
+          </div>
+        </div>
+      {/each}
 
       {#if compose.quote}
         <div class="context quoted">
-          <span class="to-label">{authorName(compose.quote)} · @{compose.quote.post.author.handle}</span>
+          <span class="to-label"
+            >{authorName(compose.quote)} · @{compose.quote.post.author.handle}</span
+          >
           <p class="quote">{postText(compose.quote)}</p>
-        </div>
-      {/if}
-
-      {#if attached.length}
-        <div class="attachments">
-          {#each attached as img, i (img.url)}
-            <div class="att">
-              <img src={img.url} alt="" />
-              <button class="att-remove" aria-label="Remove image" onclick={() => removeImage(i)}
-                >✕</button
-              >
-              <input
-                class="att-alt"
-                placeholder="Alt text — describe the image"
-                bind:value={attached[i].alt}
-              />
-            </div>
-          {/each}
         </div>
       {/if}
 
@@ -156,26 +235,16 @@
       {/if}
 
       <div class="foot">
-        <button
-          class="tool"
-          title="Add image"
-          disabled={attached.length >= MAX_IMAGES}
-          onclick={() => fileInput?.click()}
-        >
-          🖼 Image
-        </button>
-        <input
-          bind:this={fileInput}
-          type="file"
-          accept="image/*"
-          multiple
-          hidden
-          onchange={onFiles}
-        />
+        <button class="add" onclick={addSegment}>+ Add post</button>
         <span class="spacer"></span>
-        <span class="count" class:over={remaining < 0}>{remaining}</span>
         <button class="post" onclick={submit} disabled={!canPost}>
-          {posting ? 'Posting…' : compose.reply ? 'Reply' : 'Post'}
+          {posting
+            ? 'Posting…'
+            : isThread
+              ? `Post thread (${segments.length})`
+              : compose.reply
+                ? 'Reply'
+                : 'Post'}
         </button>
       </div>
     </div>
@@ -189,12 +258,14 @@
     background: rgba(0, 0, 0, 0.55);
     display: grid;
     place-items: start center;
-    padding-top: 12vh;
+    padding-top: 10vh;
     z-index: 1000;
+    overflow-y: auto;
   }
   .modal {
     width: 100%;
     max-width: 480px;
+    margin-bottom: 4vh;
     background: var(--bg-elev);
     border: 1px solid var(--border);
     border-radius: 14px;
@@ -234,8 +305,28 @@
     color: var(--text-dim);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    max-height: 4.5em;
-    overflow: hidden;
+  }
+  .segment.threaded {
+    border-left: 2px solid var(--border);
+    padding-left: 0.7rem;
+    margin-bottom: 0.6rem;
+  }
+  .seg-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.3rem;
+  }
+  .seg-num {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+  }
+  .seg-remove {
+    padding: 0.1rem 0.4rem;
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    font-size: 0.75rem;
   }
   textarea {
     width: 100%;
@@ -252,16 +343,11 @@
     outline: none;
     border-color: var(--accent);
   }
-  .error {
-    color: var(--danger);
-    font-size: 0.82rem;
-    margin: 0.5rem 0 0;
-  }
   .attachments {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 0.5rem;
-    margin-top: 0.7rem;
+    margin-top: 0.5rem;
   }
   .att {
     position: relative;
@@ -296,29 +382,44 @@
     font-size: 0.75rem;
     padding: 0.35rem 0.5rem;
   }
-  .foot {
+  .seg-tools {
     display: flex;
     align-items: center;
-    gap: 0.9rem;
-    margin-top: 0.7rem;
-  }
-  .spacer {
-    flex: 1;
+    gap: 0.75rem;
+    margin-top: 0.4rem;
   }
   .tool {
-    font-size: 0.82rem;
-    padding: 0.4rem 0.7rem;
+    font-size: 0.8rem;
+    padding: 0.35rem 0.6rem;
   }
   .tool:disabled {
     opacity: 0.5;
   }
   .count {
     color: var(--text-dim);
-    font-size: 0.82rem;
+    font-size: 0.8rem;
     font-variant-numeric: tabular-nums;
   }
   .count.over {
     color: var(--danger);
+  }
+  .error {
+    color: var(--danger);
+    font-size: 0.82rem;
+    margin: 0.5rem 0 0;
+  }
+  .foot {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    margin-top: 0.8rem;
+  }
+  .spacer {
+    flex: 1;
+  }
+  .add {
+    font-size: 0.82rem;
+    padding: 0.4rem 0.7rem;
   }
   .post {
     background: var(--accent);

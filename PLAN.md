@@ -196,5 +196,6 @@ Each milestone is a working app; 1–3 recreate the daily-driver experience.
   (clickable links/mentions), plus **image embeds** in the card. (Mastotron was read-only;
   Skynets is not.) **Quote-embed cards** ✅ and **external link-preview cards** ✅ render
   inline in the hover card. **Image upload** ✅ — attach up to 4 images with per-image alt
-  text, client-side downscale/compress, images (or record-with-media) embed, optimistic
-  preview. Later: multi-post thread composer.
+  text, client-side downscale/compress. **Thread composer** ✅ — "+ Add post" writes a
+  multi-post self-reply chain (each segment its own text + images); it lands in the graph
+  as a collapsed thread node.
