@@ -1,4 +1,5 @@
 import { getAgent } from './agent'
+import { demoFeed, isDemo } from './demo'
 import type { AppBskyFeedDefs } from '@atproto/api'
 
 export type FeedItem = AppBskyFeedDefs.FeedViewPost
@@ -13,6 +14,7 @@ export interface TimelinePage {
  * Pass the previous page's `cursor` to page backwards in time.
  */
 export async function getTimeline(cursor?: string, limit = 30): Promise<TimelinePage> {
+  if (isDemo()) return { items: demoFeed(), cursor: undefined }
   const res = await getAgent().getTimeline({ cursor, limit })
   return { items: res.data.feed, cursor: res.data.cursor }
 }

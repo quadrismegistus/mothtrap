@@ -7,6 +7,7 @@ import {
   setActiveAgent,
 } from '../api/agent'
 import { initOAuth, revokeOAuth, signInOAuth } from '../api/oauth'
+import { isDemo } from '../api/demo'
 import { read } from './read.svelte'
 
 type Status = 'loading' | 'logged-out' | 'logged-in'
@@ -21,6 +22,8 @@ class SessionState {
   status = $state<Status>('loading')
   handle = $state<string | undefined>(undefined)
   did = $state<string | undefined>(undefined)
+  displayName = $state<string | undefined>(undefined)
+  avatar = $state<string | undefined>(undefined)
   method = $state<Method | undefined>(undefined)
   error = $state<string | undefined>(undefined)
 
@@ -33,6 +36,8 @@ class SessionState {
     try {
       const profile = await agent.getProfile({ actor: did })
       this.handle = profile.data.handle
+      this.displayName = profile.data.displayName
+      this.avatar = profile.data.avatar
     } catch {
       this.handle = did
     }
@@ -58,6 +63,14 @@ class SessionState {
    * in the URL; app-password resume is the fallback.
    */
   async init() {
+    if (isDemo()) {
+      this.status = 'logged-in'
+      this.method = 'app-password'
+      this.handle = 'demo.bsky.social'
+      this.did = 'did:plc:demo'
+      await read.load(this.did)
+      return
+    }
     try {
       const oauthDid = await initOAuth()
       if (oauthDid && hasAgent()) {

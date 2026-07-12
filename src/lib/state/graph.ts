@@ -8,11 +8,6 @@ export interface GraphNode {
   item: FeedItem
   score: number
   timestamp: number
-  /** Normalized layout coords in [0,1]: x = recency (1 = newest), y = engagement (0 = loudest). */
-  x: number
-  y: number
-  /** Normalized size in [0,1] by score, for the renderer to map to px. */
-  sizeRank: number
   /** Thread this post belongs to (root post uri). */
   rootUri: string
   /** True if this node is the collapse/expand handle for its thread. */
@@ -20,6 +15,18 @@ export interface GraphNode {
   /** Replies hidden under this collapsed representative (0 if standalone or expanded). */
   collapsedCount: number
 }
+
+/** Normalized layout position in [0,1], computed per visible set (not baked in). */
+export interface NodePosition {
+  /** x = recency (1 = newest). */
+  x: number
+  /** y = engagement (0 = loudest). */
+  y: number
+  /** size by engagement rank in [0,1]. */
+  sizeRank: number
+}
+
+export type SelectMode = 'top' | 'recent' | 'mix'
 
 export interface GraphEdge {
   id: string
@@ -43,11 +50,6 @@ function fractionalRanks(values: number[]): number[] {
   return ranks
 }
 
-/** Small deterministic-ish jitter so equal ranks don't stack exactly. */
-function jitter(amount = 0.015): number {
-  return (Math.random() - 0.5) * 2 * amount
-}
-
 function timestampOf(item: FeedItem): number {
   const rec = item.post.record
   const created = AppBskyFeedPost.isRecord(rec) ? rec.createdAt : undefined
@@ -59,6 +61,77 @@ function parentUri(item: FeedItem): string | undefined {
   const rec = item.post.record
   if (AppBskyFeedPost.isRecord(rec) && rec.reply) return rec.reply.parent.uri
   return undefined
+}
+
+/**
+ * Compute normalized [0,1] layout positions over *these* nodes (not the global
+ * set), so whatever subset is shown always fills the full x/y range. x = recency
+ * rank, y = engagement rank (inverted so loudest is at top), size = engagement
+ * rank. Overlaps are separated by the force sim's collision, so no jitter needed.
+ */
+export function layoutPositions(nodes: GraphNode[]): Map<string, NodePosition> {
+  const timeRanks = fractionalRanks(nodes.map((n) => n.timestamp))
+  const scoreRanks = fractionalRanks(nodes.map((n) => n.score))
+  const out = new Map<string, NodePosition>()
+  nodes.forEach((n, i) => {
+    out.set(n.uri, { x: timeRanks[i], y: 1 - scoreRanks[i], sizeRank: scoreRanks[i] })
+  })
+  return out
+}
+
+/** Wrapping slice of `limit` items from a sorted list starting at `offset`. */
+function windowSlice<T>(sorted: T[], limit: number, offset: number): T[] {
+  const total = sorted.length
+  if (total <= limit) return sorted
+  const start = ((offset % total) + total) % total
+  const out: T[] = []
+  for (let i = 0; i < limit; i++) out.push(sorted[(start + i) % total])
+  return out
+}
+
+/**
+ * Choose which nodes to show:
+ * - `top`: the loudest `limit` (highest engagement).
+ * - `recent`: the newest `limit`.
+ * - `mix`: the loudest half + the newest half (deduped).
+ * `offset` rotates the top/recent window (the turnover queue). Members of an
+ * expanded thread are always included so unspooling never hides part of a thread.
+ */
+export function selectVisible(
+  nodes: GraphNode[],
+  mode: SelectMode,
+  limit: number,
+  offset: number,
+  expanded: ReadonlySet<string>,
+): GraphNode[] {
+  let chosen: GraphNode[]
+  if (nodes.length <= limit) {
+    chosen = nodes
+  } else if (mode === 'mix') {
+    const byScore = [...nodes].sort((a, b) => b.score - a.score)
+    const byTime = [...nodes].sort((a, b) => b.timestamp - a.timestamp)
+    const recentHalf = Math.floor(limit / 2)
+    const picked = new Map<string, GraphNode>()
+    for (const n of byScore) {
+      if (picked.size >= limit - recentHalf) break
+      picked.set(n.uri, n)
+    }
+    for (const n of byTime) {
+      if (picked.size >= limit) break
+      if (!picked.has(n.uri)) picked.set(n.uri, n)
+    }
+    chosen = [...picked.values()]
+  } else {
+    const sorted =
+      mode === 'recent'
+        ? [...nodes].sort((a, b) => b.timestamp - a.timestamp)
+        : [...nodes].sort((a, b) => b.score - a.score)
+    chosen = windowSlice(sorted, limit, offset)
+  }
+
+  const set = new Map(chosen.map((n) => [n.uri, n]))
+  for (const n of nodes) if (expanded.has(n.rootUri)) set.set(n.uri, n)
+  return [...set.values()]
 }
 
 /**
@@ -179,20 +252,13 @@ export function buildGraph(items: FeedItem[], expanded: ReadonlySet<string> = ne
     }
   }
 
-  const scoreRanks = fractionalRanks(units.map((u) => u.score))
-  const timeRanks = fractionalRanks(units.map((u) => u.timestamp))
-
-  const nodes: GraphNode[] = units.map((u, i) => ({
+  // Positions are computed later per *visible* set (see layoutPositions), not here.
+  const nodes: GraphNode[] = units.map((u) => ({
     uri: u.item.post.uri,
     cid: u.item.post.cid,
     item: u.item,
     score: u.score,
     timestamp: u.timestamp,
-    // x = recency: newest (highest timestamp rank) to the right.
-    x: clamp01(timeRanks[i] + jitter()),
-    // y = engagement: loudest (highest score rank) at the top → invert.
-    y: clamp01(1 - scoreRanks[i] + jitter()),
-    sizeRank: scoreRanks[i],
     rootUri: u.rootUri,
     isThreadRoot: u.isThreadRoot,
     collapsedCount: u.collapsedCount,
@@ -209,8 +275,4 @@ export function buildGraph(items: FeedItem[], expanded: ReadonlySet<string> = ne
   }
 
   return { nodes, edges }
-}
-
-function clamp01(v: number): number {
-  return v < 0 ? 0 : v > 1 ? 1 : v
 }

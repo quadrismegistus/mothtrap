@@ -160,17 +160,25 @@ jQuery-UI + socket.io + vis-network.
    resume; timeline fetch. (OAuth was pulled forward from milestone 5.)
 2. **Static graph** ✅ — timeline posts as avatar nodes at semantic x/y positions,
    reply edges, hover card, Graph/List toggle. Dark mode.
-3. **Triage loop** *(in progress)* — done so far: dismiss/mark-read (✕ on node hover +
-   `D` key) with IndexedDB persistence so dismissed posts never reappear; **anchored
-   d3-force slow-motion layout**; **thread collapsing** (a thread with 2+ posts in view
-   becomes one representative node with a "+N" badge, placed by the thread's latest
-   activity + peak engagement; single-click unspools/re-collapses it, double-click opens
-   on bsky.app); relative timestamp on the hover card. Still to do: queue + turnover
-   timer; pause/play; node-limit and speed knobs; `N`/`L`/`R` keyboard actions.
-4. **Threads** — `C`/right-click expands via `getPostThread`; thread subtrees get
-   pushed into the graph; visual distinction for read/unread and reply-count badges.
-5. **Live + polish** — 60s poll loop (or Jetstream), scoring options, open-in-bsky.app
-   links, deploy static build, OAuth login.
+3. **Triage loop** ✅ — dismiss/mark-read (✕ on node hover + `D` key, dismissing a post
+   also dismisses its reply subtree) with IndexedDB persistence so dismissed posts never
+   reappear; **anchored d3-force slow-motion layout**; **thread collapsing** (a thread
+   with 2+ posts in view becomes one representative node with a "+N" badge, placed by the
+   thread's latest activity + peak engagement; single-click unspools/re-collapses it,
+   double-click opens on bsky.app); relative timestamp on the hover card; **node limit +
+   selection modes** — show only N nodes chosen by Top (loudest) / Recent (newest) /
+   Mix (loudest half + newest half); layout is re-ranked over just the *visible* set so
+   it always fills the full x/y range; a gear **config popover** holds mode, count, and
+   an opt-in auto-cycle (rotates the queued overflow through over time — replaced the
+   awkward prominent play button); keyboard `R` load more, `N` next batch, `L` back to
+   top, `D` dismiss, `Esc` close.
+4. **Threads** — *not yet.* So far threads are only collapsed/expanded among posts
+   already in the timeline; this milestone adds `getPostThread` to pull in replies we
+   *don't* have (fetch the full conversation on demand), plus read/unread styling and
+   reply-count badges.
+5. **Live + polish** — done early: **OAuth login**, **deployed** to GitHub Pages at
+   ryanheuser.com/skynets/, **open-in-bsky.app** on double-click. Still to do: 60s poll
+   loop (or Jetstream) for live updates, scoring options (e.g. follower-weighting).
 
 Each milestone is a working app; 1–3 recreate the daily-driver experience.
 
@@ -181,4 +189,7 @@ Each milestone is a working app; 1–3 recreate the daily-driver experience.
   `getFeed` — worth a feed-picker in the toolbar early?
 - **Notifications/mentions view**: Mastotron never had one; `listNotifications` would
   slot into the same graph metaphor nicely (later).
-- **Posting/replying**: Mastotron was read-only. Keep Skynets read-only at first?
+- **Posting/replying**: ✅ done — compose modal (new post + reply), reply via the ↩ on a
+  node's hover, 300-grapheme counter, optimistic insertion so your post shows immediately.
+  (Mastotron was read-only; Skynets is not.) Later: likes/reposts, rich text (mentions,
+  links, images) via facets.
