@@ -9,8 +9,12 @@ Bluesky in Svelte. See [PLAN.md](./PLAN.md) for the design and roadmap.
 npm install
 npm run dev      # http://127.0.0.1:1997
 npm run check    # type-check
+npm test         # unit tests (vitest)
 npm run build    # production build to dist/
 ```
+
+Append `?demo=1` to the dev URL to render the graph with local fixture posts and no
+login — handy for UI work and Playwright screenshots.
 
 Open the app at **http://127.0.0.1:1997** (not `localhost`) — atproto's OAuth
 loopback dev mode requires the `127.0.0.1` origin.

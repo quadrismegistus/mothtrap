@@ -1,8 +1,10 @@
 <script lang="ts">
   import { session } from './lib/state/session.svelte'
+  import { compose } from './lib/state/compose.svelte'
   import Login from './lib/components/Login.svelte'
   import Timeline from './lib/components/Timeline.svelte'
   import Graph from './lib/components/Graph.svelte'
+  import Compose from './lib/components/Compose.svelte'
 
   type View = 'graph' | 'list'
   let view = $state<View>('graph')
@@ -23,6 +25,7 @@
         <button class:on={view === 'list'} onclick={() => (view = 'list')}>List</button>
       </div>
       <div class="who">
+        <button class="compose-btn" onclick={() => compose.openNew()}>New post</button>
         <span>@{session.handle}</span>
         <button onclick={() => session.logout()}>Sign out</button>
       </div>
@@ -35,6 +38,7 @@
       {/if}
     </main>
   </div>
+  <Compose />
 {/if}
 
 <style>
@@ -88,5 +92,15 @@
   .who button {
     padding: 0.35rem 0.7rem;
     font-size: 0.85rem;
+  }
+  .who .compose-btn {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 600;
+  }
+  .who .compose-btn:hover {
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
   }
 </style>

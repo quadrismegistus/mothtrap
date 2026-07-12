@@ -1,9 +1,87 @@
-import { AppBskyFeedPost } from '@atproto/api'
+import {
+  AppBskyEmbedExternal,
+  AppBskyEmbedImages,
+  AppBskyEmbedRecord,
+  AppBskyEmbedRecordWithMedia,
+  AppBskyFeedPost,
+} from '@atproto/api'
 import type { FeedItem } from './timeline'
 
 export function postText(item: FeedItem): string {
   const rec = item.post.record
   return AppBskyFeedPost.isRecord(rec) ? rec.text : ''
+}
+
+/** Rich-text facets stored on the post record, if any. */
+export function postFacets(item: FeedItem): unknown {
+  const rec = item.post.record
+  return AppBskyFeedPost.isRecord(rec) ? rec.facets : undefined
+}
+
+export interface PostImage {
+  thumb: string
+  alt: string
+}
+
+/** Image thumbnails on a post (direct images embed or record-with-media). */
+export function postImages(item: FeedItem): PostImage[] {
+  const embed = item.post.embed
+  let view: unknown = embed
+  if (AppBskyEmbedRecordWithMedia.isView(embed)) view = embed.media
+  if (AppBskyEmbedImages.isView(view)) {
+    return view.images.map((i) => ({ thumb: i.thumb, alt: i.alt }))
+  }
+  return []
+}
+
+export interface ExternalCard {
+  uri: string
+  title: string
+  description: string
+  thumb?: string
+}
+
+/** External link-preview card on a post (or record-with-media), if any. */
+export function postExternal(item: FeedItem): ExternalCard | null {
+  const embed = item.post.embed
+  let view: unknown = embed
+  if (AppBskyEmbedRecordWithMedia.isView(embed)) view = embed.media
+  if (AppBskyEmbedExternal.isView(view)) {
+    const e = view.external
+    return { uri: e.uri, title: e.title, description: e.description, thumb: e.thumb }
+  }
+  return null
+}
+
+export interface QuotedPost {
+  uri: string
+  name: string
+  handle: string
+  text: string
+  avatar?: string
+}
+
+/** The post quoted by this one (record embed or record-with-media), if any. */
+export function postQuote(item: FeedItem): QuotedPost | null {
+  const embed = item.post.embed
+  let inner: unknown = null
+  if (AppBskyEmbedRecord.isView(embed)) inner = embed.record
+  else if (AppBskyEmbedRecordWithMedia.isView(embed) && AppBskyEmbedRecord.isView(embed.record)) {
+    inner = embed.record.record
+  }
+  if (AppBskyEmbedRecord.isViewRecord(inner)) {
+    const author = inner.author
+    const value = inner.value
+    const text = AppBskyFeedPost.isRecord(value) ? value.text : ''
+    return {
+      uri: inner.uri,
+      name: author.displayName || author.handle,
+      handle: author.handle,
+      text,
+      avatar: author.avatar,
+    }
+  }
+  return null
 }
 
 /** Display name of the reposter, if this feed item is a repost. */

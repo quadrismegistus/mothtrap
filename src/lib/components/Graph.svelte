@@ -1,9 +1,19 @@
 <script lang="ts">
   import { getTimeline, type FeedItem } from '../api/timeline'
   import { bskyUrl } from '../api/post'
-  import { buildGraph, threadDescendants, type GraphNode } from '../state/graph'
+  import {
+    buildGraph,
+    layoutPositions,
+    selectVisible,
+    threadDescendants,
+    type GraphNode,
+    type SelectMode,
+  } from '../state/graph'
   import { ForceLayout, type Target } from '../state/forceLayout'
   import { read } from '../state/read.svelte'
+  import { settings } from '../state/settings.svelte'
+  import { compose } from '../state/compose.svelte'
+  import { threads } from '../state/threads.svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import PostNode from './PostNode.svelte'
   import PostCard from './PostCard.svelte'
@@ -21,6 +31,12 @@
   let error = $state<string | undefined>(undefined)
   let hovered = $state<string | null>(null)
 
+  // View preferences (node limit, selection mode, auto-cycle) live in a
+  // persisted store; turnover offset and popover visibility are ephemeral.
+  let turnoverOffset = $state(0)
+  let showConfig = $state(false)
+  const modes: SelectMode[] = ['top', 'recent', 'mix']
+
   let w = $state(0)
   let h = $state(0)
 
@@ -30,13 +46,30 @@
   // Threads the user has unspooled (by thread root uri).
   const expanded = new SvelteSet<string>()
 
-  // Posts still visible: not dismissed. Reactive on read.dismissed.
-  const visible = $derived(items.filter((i) => !read.isDismissed(i.post.uri)))
+  // Merge optimistically-posted items (our own new posts/replies) with the feed,
+  // then drop dismissed ones. buildGraph dedupes by uri.
+  const allItems = $derived([...compose.injected, ...threads.posts, ...items])
+  const visible = $derived(allItems.filter((i) => !read.isDismissed(i.post.uri)))
   const graph = $derived(buildGraph(visible, expanded))
+
+  const total = $derived(graph.nodes.length)
+  const queued = $derived(total <= settings.nodeLimit ? 0 : total - settings.nodeLimit)
+
+  // Which nodes to show (top/recent/mix), then their layout computed over just
+  // this set so they always fill the full x/y range.
+  const visibleNodes = $derived(
+    selectVisible(graph.nodes, settings.selectMode, settings.nodeLimit, turnoverOffset, expanded),
+  )
+  const nodeLayout = $derived(layoutPositions(visibleNodes))
+
+  const visibleUris = $derived(new Set(visibleNodes.map((n) => n.uri)))
+  const visibleEdges = $derived(
+    graph.edges.filter((e) => visibleUris.has(e.from) && visibleUris.has(e.to)),
+  )
 
   const edgeCount = $derived.by(() => {
     const c = new Map<string, number>()
-    for (const e of graph.edges) c.set(e.to, (c.get(e.to) ?? 0) + 1)
+    for (const e of visibleEdges) c.set(e.to, (c.get(e.to) ?? 0) + 1)
     return c
   })
 
@@ -44,15 +77,18 @@
   const targets = $derived.by<Target[]>(() => {
     const innerW = Math.max(0, w - 2 * PAD_X)
     const innerH = Math.max(0, h - PAD_TOP - PAD_BOTTOM)
-    return graph.nodes.map((n) => ({
-      id: n.uri,
-      tx: PAD_X + n.x * innerW,
-      ty: PAD_TOP + n.y * innerH,
-      r: (MIN_SIZE + n.sizeRank * (MAX_SIZE - MIN_SIZE)) / 2,
-    }))
+    return visibleNodes.map((n) => {
+      const p = nodeLayout.get(n.uri) ?? { x: 0.5, y: 0.5, sizeRank: 0.5 }
+      return {
+        id: n.uri,
+        tx: PAD_X + p.x * innerW,
+        ty: PAD_TOP + p.y * innerH,
+        r: (MIN_SIZE + p.sizeRank * (MAX_SIZE - MIN_SIZE)) / 2,
+      }
+    })
   })
 
-  const nodeByUri = $derived(new Map(graph.nodes.map((n) => [n.uri, n])))
+  const nodeByUri = $derived(new Map(visibleNodes.map((n) => [n.uri, n])))
 
   // Placed = target metadata + live simulation position (fallback to target).
   const placed = $derived.by(() =>
@@ -70,7 +106,7 @@
   const placedByUri = $derived(new Map(placed.map((p) => [p.node.uri, p])))
 
   const edgeLines = $derived.by(() =>
-    graph.edges
+    visibleEdges
       .map((e) => {
         const a = placedByUri.get(e.from)
         const b = placedByUri.get(e.to)
@@ -103,11 +139,52 @@
     return () => l.stop()
   })
 
-  // Reheat whenever targets or links change (new data, resize, dismissal).
+  // Reheat whenever targets or links change (new data, resize, dismissal, turnover).
   $effect(() => {
     const t = targets
-    const links = graph.edges.map((e) => ({ source: e.from, target: e.to }))
+    const links = visibleEdges.map((e) => ({ source: e.from, target: e.to }))
     layout?.update(t, links)
+  })
+
+  // Keep the graph full: when the queue runs dry (fewer posts loaded than the
+  // node limit) and more can be fetched, pull the next page. This is what makes
+  // dismissing a post backfill the next one so the visible count holds steady.
+  $effect(() => {
+    if (!loading && cursor && total < settings.nodeLimit) load(true)
+  })
+
+  // Auto-cycle timer: while on, rotate the queue one step per interval.
+  // (Mix mode has no meaningful rotation, so it only applies to top/recent.)
+  $effect(() => {
+    if (!settings.autoCycle || settings.selectMode === 'mix' || total <= settings.nodeLimit) return
+    const n = total
+    const id = setInterval(
+      () => {
+        turnoverOffset = (turnoverOffset + 1) % n
+      },
+      Math.max(1, settings.cycleInterval) * 1000,
+    )
+    return () => clearInterval(id)
+  })
+
+  // Live updates: poll the newest page every 60s and slide in genuinely-new
+  // posts (deduped). Toggle in the config popover; persisted.
+  async function pollNew() {
+    if (loading) return
+    try {
+      const page = await getTimeline()
+      const have = new Set(items.map((i) => i.post.uri))
+      const fresh = page.items.filter((i) => !have.has(i.post.uri))
+      if (fresh.length) items = [...fresh, ...items]
+    } catch {
+      // Transient; the next tick retries.
+    }
+  }
+
+  $effect(() => {
+    if (!settings.livePoll) return
+    const id = setInterval(pollNew, 60_000)
+    return () => clearInterval(id)
   })
 
   async function load(append: boolean) {
@@ -130,14 +207,19 @@
   }
 
   function toggleThread(node: GraphNode) {
-    if (expanded.has(node.rootUri)) expanded.delete(node.rootUri)
-    else expanded.add(node.rootUri)
+    if (expanded.has(node.rootUri)) {
+      expanded.delete(node.rootUri)
+    } else {
+      expanded.add(node.rootUri)
+      // Pull the full conversation so replies not in the timeline appear too.
+      threads.ensure(node.rootUri)
+    }
   }
 
   function dismiss(uri: string) {
     // Dismiss the post and every reply hanging off it, so clearing a thread
     // clears the whole thread rather than leaving orphaned replies behind.
-    const all = [uri, ...threadDescendants(items, uri)]
+    const all = [uri, ...threadDescendants(allItems, uri)]
     read.dismissMany(all)
     if (hovered && all.includes(hovered)) hovered = null
   }
@@ -156,9 +238,32 @@
     open(node)
   }
 
+  function nextBatch() {
+    if (total > settings.nodeLimit) turnoverOffset = (turnoverOffset + settings.nodeLimit) % total
+  }
+
+  // Hover with a short close delay so the pointer can travel from a node to its
+  // card (and interact with it) without the card vanishing.
+  let clearTimer: ReturnType<typeof setTimeout> | undefined
+  function setHovered(uri: string) {
+    clearTimeout(clearTimer)
+    hovered = uri
+  }
+  function scheduleClear() {
+    clearTimeout(clearTimer)
+    clearTimer = setTimeout(() => (hovered = null), 140)
+  }
+
   function onKey(e: KeyboardEvent) {
-    if (e.key === 'Escape') hovered = null
-    else if ((e.key === 'd' || e.key === 'D') && hovered) dismiss(hovered)
+    if (e.target instanceof HTMLInputElement) return
+    const k = e.key.toLowerCase()
+    if (e.key === 'Escape') {
+      hovered = null
+      showConfig = false
+    } else if (k === 'd' && hovered) dismiss(hovered)
+    else if (k === 'r') load(true)
+    else if (k === 'n') nextBatch()
+    else if (k === 'l') turnoverOffset = 0
   }
 
   load(false)
@@ -169,6 +274,7 @@
 <div class="graph" bind:clientWidth={w} bind:clientHeight={h}>
   <div class="axis y-axis">louder ↑ · ↓ quieter</div>
   <div class="axis x-axis">← older · newer →</div>
+  <div class="axis legend"><span class="dot"></span> size = replies</div>
 
   <svg class="edges" width={w} height={h}>
     {#each edgeLines as line (line.id)}
@@ -184,7 +290,7 @@
       size={p.size}
       hasReplies={(edgeCount.get(p.node.uri) ?? 0) > 0}
       active={hovered === p.node.uri}
-      onhover={(uri) => (hovered = uri)}
+      onhover={(uri) => (uri ? setHovered(uri) : scheduleClear())}
       onclick={onNodeClick}
       ondblclick={onNodeDblClick}
       ondismiss={dismiss}
@@ -192,7 +298,15 @@
   {/each}
 
   {#if hoveredCard}
-    <PostCard item={hoveredCard.item} x={hoveredCard.x} y={hoveredCard.y} />
+    <PostCard
+      item={hoveredCard.item}
+      x={hoveredCard.x}
+      y={hoveredCard.y}
+      onreply={(it) => compose.openReply(it)}
+      onquote={(it) => compose.openQuote(it)}
+      onkeep={() => setHovered(hoveredCard.item.post.uri)}
+      onleave={scheduleClear}
+    />
   {/if}
 
   {#if items.length === 0 && !loading}
@@ -201,6 +315,67 @@
   {#if loading && items.length === 0}
     <div class="empty">Loading timeline…</div>
   {/if}
+
+  <div class="config-wrap">
+    <button class="gear" onclick={() => (showConfig = !showConfig)} title="View settings">
+      ⚙ <span class="counts">{visibleNodes.length}{queued > 0 ? ` / ${total}` : ''}</span>
+    </button>
+
+    {#if showConfig}
+      <div class="config">
+        <div class="row seg-row">
+          <span class="label">Show</span>
+          <div class="seg">
+            {#each modes as m}
+              <button class:on={settings.selectMode === m} onclick={() => (settings.selectMode = m)}>{m}</button>
+            {/each}
+          </div>
+        </div>
+        <p class="hint">
+          {settings.selectMode === 'top'
+            ? 'The loudest posts by engagement.'
+            : settings.selectMode === 'recent'
+              ? 'The newest posts.'
+              : 'The loudest half + the newest half.'}
+        </p>
+
+        <div class="row">
+          <span class="label">Count</span>
+          <input type="range" min="5" max="60" bind:value={settings.nodeLimit} />
+          <span class="val">{settings.nodeLimit}</span>
+        </div>
+
+        <div class="row">
+          <span class="label">Auto-cycle</span>
+          <input
+            type="checkbox"
+            bind:checked={settings.autoCycle}
+            disabled={settings.selectMode === 'mix' || total <= settings.nodeLimit}
+          />
+          <input
+            type="range"
+            min="1"
+            max="15"
+            bind:value={settings.cycleInterval}
+            disabled={!settings.autoCycle || settings.selectMode === 'mix'}
+          />
+          <span class="val">{settings.cycleInterval}s</span>
+        </div>
+        <p class="hint">
+          {settings.selectMode === 'mix'
+            ? 'Cycling applies to Top/Recent.'
+            : `Rotates the ${queued} queued posts through over time.`}
+        </p>
+
+        <div class="row">
+          <span class="label">Live</span>
+          <input type="checkbox" bind:checked={settings.livePoll} />
+          <span class="val"></span>
+        </div>
+        <p class="hint">Pull new posts into the graph every 60s.</p>
+      </div>
+    {/if}
+  </div>
 
   <div class="hud">
     {#if read.dismissed.size > 0}
@@ -250,12 +425,113 @@
     transform: translateY(-50%) rotate(180deg);
     writing-mode: vertical-rl;
   }
+  .legend {
+    top: 14px;
+    right: 16px;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+  .legend .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 2px solid var(--text-dim);
+    display: inline-block;
+  }
   .empty {
     position: absolute;
     inset: 0;
     display: grid;
     place-items: center;
     color: var(--text-dim);
+  }
+  .config-wrap {
+    position: absolute;
+    left: 16px;
+    bottom: 16px;
+  }
+  .gear {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.7rem;
+    font-size: 0.85rem;
+    background: color-mix(in srgb, var(--bg-elev) 88%, transparent);
+    backdrop-filter: blur(6px);
+  }
+  .gear .counts {
+    color: var(--text-dim);
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .config {
+    position: absolute;
+    left: 0;
+    bottom: calc(100% + 8px);
+    width: 260px;
+    padding: 0.9rem;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    font-size: 0.8rem;
+    overflow: hidden;
+  }
+  .config .row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
+  }
+  .config .label {
+    color: var(--text-dim);
+    min-width: 4.5em;
+    flex: none;
+  }
+  .config input[type='range'] {
+    flex: 1 1 0;
+    min-width: 0;
+    accent-color: var(--accent);
+  }
+  .config input[type='checkbox'] {
+    flex: none;
+    accent-color: var(--accent);
+  }
+  .config .val {
+    color: var(--text);
+    min-width: 2.4em;
+    flex: none;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .config .hint {
+    margin: 0 0 0.5rem;
+    color: var(--text-dim);
+    font-size: 0.72rem;
+    line-height: 1.35;
+  }
+  .seg {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .seg button {
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.78rem;
+    text-transform: capitalize;
+    color: var(--text-dim);
+  }
+  .seg button.on {
+    background: var(--accent);
+    color: #fff;
   }
   .hud {
     position: absolute;
