@@ -1,6 +1,7 @@
 <script lang="ts">
   import { compose, buildSelfPost } from '../state/compose.svelte'
   import { createPost, graphemeLength, MAX_GRAPHEMES } from '../api/posting'
+  import { detectFacets } from '../api/richtext'
   import { authorName, postText } from '../api/post'
 
   let text = $state('')
@@ -30,7 +31,8 @@
       const quote = compose.quote
         ? { uri: compose.quote.post.uri, cid: compose.quote.post.cid }
         : null
-      const { uri, cid } = await createPost(text, reply, quote)
+      const facets = await detectFacets(text)
+      const { uri, cid } = await createPost(text, reply, quote, facets)
       compose.inject(buildSelfPost(text, uri, cid, reply))
       compose.close()
     } catch (err) {

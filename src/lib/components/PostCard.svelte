@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { FeedItem } from '../api/timeline'
-  import { authorName, fullDate, postText, reposter, timeAgo } from '../api/post'
+  import { authorName, fullDate, postFacets, postImages, postText, reposter, timeAgo } from '../api/post'
+  import { segments } from '../api/richtext'
   import { interactions } from '../state/interactions.svelte'
 
   interface Props {
@@ -18,6 +19,8 @@
   const rt = $derived(reposter(item))
   const liked = $derived(interactions.liked(item))
   const reposted = $derived(interactions.reposted(item))
+  const textSegs = $derived(segments(postText(item), postFacets(item)))
+  const images = $derived(postImages(item))
 
   let repostMenu = $state(false)
 
@@ -49,7 +52,22 @@
     </div>
     <span class="time" title={fullDate(item)}>{timeAgo(item)}</span>
   </div>
-  <div class="text">{postText(item)}</div>
+  <div class="text">
+    {#each textSegs as seg}{#if seg.href}<a
+          href={seg.href}
+          target="_blank"
+          rel="noreferrer"
+          onclick={(e) => e.stopPropagation()}>{seg.text}</a
+        >{:else}{seg.text}{/if}{/each}
+  </div>
+
+  {#if images.length}
+    <div class="images" data-n={Math.min(images.length, 4)}>
+      {#each images.slice(0, 4) as img}
+        <img src={img.thumb} alt={img.alt} title={img.alt} />
+      {/each}
+    </div>
+  {/if}
 
   <div class="actions">
     <button class="act" title="Reply" onclick={() => onreply(item)}>
@@ -159,6 +177,31 @@
     line-height: 1.4;
     font-size: 0.9rem;
     margin-bottom: 0.5rem;
+  }
+  .text a {
+    color: var(--accent);
+  }
+  .images {
+    display: grid;
+    gap: 3px;
+    margin-bottom: 0.5rem;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .images[data-n='1'] {
+    grid-template-columns: 1fr;
+  }
+  .images[data-n='2'],
+  .images[data-n='3'],
+  .images[data-n='4'] {
+    grid-template-columns: 1fr 1fr;
+  }
+  .images img {
+    width: 100%;
+    height: 100%;
+    max-height: 160px;
+    object-fit: cover;
+    display: block;
   }
   .actions {
     display: flex;

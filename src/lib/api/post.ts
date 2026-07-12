@@ -1,9 +1,35 @@
-import { AppBskyFeedPost } from '@atproto/api'
+import {
+  AppBskyEmbedImages,
+  AppBskyEmbedRecordWithMedia,
+  AppBskyFeedPost,
+} from '@atproto/api'
 import type { FeedItem } from './timeline'
 
 export function postText(item: FeedItem): string {
   const rec = item.post.record
   return AppBskyFeedPost.isRecord(rec) ? rec.text : ''
+}
+
+/** Rich-text facets stored on the post record, if any. */
+export function postFacets(item: FeedItem): unknown {
+  const rec = item.post.record
+  return AppBskyFeedPost.isRecord(rec) ? rec.facets : undefined
+}
+
+export interface PostImage {
+  thumb: string
+  alt: string
+}
+
+/** Image thumbnails on a post (direct images embed or record-with-media). */
+export function postImages(item: FeedItem): PostImage[] {
+  const embed = item.post.embed
+  let view: unknown = embed
+  if (AppBskyEmbedRecordWithMedia.isView(embed)) view = embed.media
+  if (AppBskyEmbedImages.isView(view)) {
+    return view.images.map((i) => ({ thumb: i.thumb, alt: i.alt }))
+  }
+  return []
 }
 
 /** Display name of the reposter, if this feed item is a repost. */

@@ -25,12 +25,14 @@ export async function createPost(
   text: string,
   reply: ReplyTarget | null,
   quote: QuoteTarget | null = null,
+  facets?: unknown[],
 ): Promise<{ uri: string; cid: string }> {
   if (isDemo()) {
     const id = `${Date.now()}`
     return { uri: `at://did:plc:demo/app.bsky.feed.post/${id}`, cid: `demo-${id}` }
   }
-  const record: { text: string; reply?: unknown; embed?: unknown } = { text }
+  const record: { text: string; reply?: unknown; embed?: unknown; facets?: unknown[] } = { text }
+  if (facets && facets.length) record.facets = facets
   if (reply) {
     record.reply = {
       parent: { uri: reply.uri, cid: reply.cid },

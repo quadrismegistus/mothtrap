@@ -189,7 +189,9 @@ Each milestone is a working app; 1–3 recreate the daily-driver experience.
   `getFeed` — worth a feed-picker in the toolbar early?
 - **Notifications/mentions view**: Mastotron never had one; `listNotifications` would
   slot into the same graph metaphor nicely (later).
-- **Posting/replying**: ✅ done — compose modal (new post + reply), 300-grapheme counter,
-  optimistic insertion. **Likes & reposts** ✅ too — action row in the hover card
-  (interactive, hover-persistent), optimistic with rollback on failure. (Mastotron was
-  read-only; Skynets is not.) Later: rich text (mentions, links, images) via facets.
+- **Posting/replying**: ✅ done — compose modal (new post + reply + **quote-post**),
+  300-grapheme counter, optimistic insertion. **Likes & reposts** ✅ — SVG action row in
+  the hover card (interactive, hover-persistent), optimistic with rollback. **Rich text**
+  ✅ — outbound facet detection (links/@mentions post correctly) and inbound rendering
+  (clickable links/mentions), plus **image embeds** in the card. (Mastotron was read-only;
+  Skynets is not.) Later: render quote-embed cards; compose images/alt-text.
