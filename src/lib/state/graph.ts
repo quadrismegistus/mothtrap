@@ -72,11 +72,19 @@ function parentUri(item: FeedItem): string | undefined {
 export function layoutPositions(nodes: GraphNode[]): Map<string, NodePosition> {
   const timeRanks = fractionalRanks(nodes.map((n) => n.timestamp))
   const scoreRanks = fractionalRanks(nodes.map((n) => n.score))
+  // Size encodes conversation size (replies) — for a collapsed thread, the
+  // number of posts folded under it — so it carries a signal distinct from the
+  // engagement y-axis rather than duplicating it.
+  const replyRanks = fractionalRanks(nodes.map(replySignal))
   const out = new Map<string, NodePosition>()
   nodes.forEach((n, i) => {
-    out.set(n.uri, { x: timeRanks[i], y: 1 - scoreRanks[i], sizeRank: scoreRanks[i] })
+    out.set(n.uri, { x: timeRanks[i], y: 1 - scoreRanks[i], sizeRank: replyRanks[i] })
   })
   return out
+}
+
+function replySignal(n: GraphNode): number {
+  return Math.max(n.item.post.replyCount ?? 0, n.collapsedCount)
 }
 
 /** Wrapping slice of `limit` items from a sorted list starting at `offset`. */

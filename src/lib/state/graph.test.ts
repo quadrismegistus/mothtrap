@@ -58,10 +58,10 @@ describe('buildGraph', () => {
   })
 })
 
-const mkNode = (uri: string, score: number, ts: number, rootUri = uri): GraphNode => ({
+const mkNode = (uri: string, score: number, ts: number, rootUri = uri, replies = 0): GraphNode => ({
   uri,
   cid: uri,
-  item: mkPost({ uri }),
+  item: mkPost({ uri, replies }),
   score,
   timestamp: ts,
   rootUri,
@@ -120,6 +120,14 @@ describe('layoutPositions', () => {
   it('puts the loudest at the top (y=0) and newest at the right (x=1)', () => {
     expect(pos.get('a')!.y).toBe(0) // a is loudest
     expect(pos.get('c')!.x).toBe(1) // c is newest
+  })
+
+  it('sizes by reply count, independent of engagement', () => {
+    // b is quieter (lower score) but has more replies → bigger, lower node.
+    const ns = [mkNode('a', 10, 1, 'a', 0), mkNode('b', 1, 2, 'b', 8)]
+    const p = layoutPositions(ns)
+    expect(p.get('b')!.sizeRank).toBeGreaterThan(p.get('a')!.sizeRank)
+    expect(p.get('b')!.y).toBeGreaterThan(p.get('a')!.y) // quieter → lower
   })
 })
 

@@ -274,6 +274,7 @@
 <div class="graph" bind:clientWidth={w} bind:clientHeight={h}>
   <div class="axis y-axis">louder ↑ · ↓ quieter</div>
   <div class="axis x-axis">← older · newer →</div>
+  <div class="axis legend"><span class="dot"></span> size = replies</div>
 
   <svg class="edges" width={w} height={h}>
     {#each edgeLines as line (line.id)}
@@ -423,6 +424,20 @@
     left: 14px;
     transform: translateY(-50%) rotate(180deg);
     writing-mode: vertical-rl;
+  }
+  .legend {
+    top: 14px;
+    right: 16px;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+  .legend .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 2px solid var(--text-dim);
+    display: inline-block;
   }
   .empty {
     position: absolute;
