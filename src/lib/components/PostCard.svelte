@@ -3,6 +3,7 @@
   import {
     authorName,
     fullDate,
+    postExternal,
     postFacets,
     postImages,
     postQuote,
@@ -32,9 +33,18 @@
   const textSegs = $derived(segments(postText(item), postFacets(item)))
   const images = $derived(postImages(item))
   const quoted = $derived(postQuote(item))
+  const external = $derived(postExternal(item))
 
   function quoteUrl(q: QuotedPost): string {
     return `https://bsky.app/profile/${q.handle}/post/${q.uri.split('/').pop()}`
+  }
+
+  function hostOf(url: string): string {
+    try {
+      return new URL(url).hostname.replace(/^www\./, '')
+    } catch {
+      return url
+    }
   }
 
   let repostMenu = $state(false)
@@ -82,6 +92,23 @@
         <img src={img.thumb} alt={img.alt} title={img.alt} />
       {/each}
     </div>
+  {/if}
+
+  {#if external}
+    <a
+      class="external"
+      href={external.uri}
+      target="_blank"
+      rel="noreferrer"
+      onclick={(e) => e.stopPropagation()}
+    >
+      {#if external.thumb}<img class="ext-thumb" src={external.thumb} alt="" />{/if}
+      <div class="ext-body">
+        <span class="ext-host">{hostOf(external.uri)}</span>
+        <span class="ext-title">{external.title}</span>
+        {#if external.description}<span class="ext-desc">{external.description}</span>{/if}
+      </div>
+    </a>
   {/if}
 
   {#if quoted}
@@ -234,6 +261,52 @@
     max-height: 160px;
     object-fit: cover;
     display: block;
+  }
+  .external {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.5rem 0.6rem;
+    margin-bottom: 0.5rem;
+    color: inherit;
+    text-decoration: none;
+  }
+  .external:hover {
+    border-color: var(--accent);
+    text-decoration: none;
+  }
+  .ext-thumb {
+    width: 56px;
+    height: 56px;
+    border-radius: 8px;
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+  .ext-body {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 0.1rem;
+  }
+  .ext-host {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+  }
+  .ext-title {
+    font-size: 0.83rem;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ext-desc {
+    font-size: 0.76rem;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .quoted {
     display: block;

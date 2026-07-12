@@ -194,5 +194,5 @@ Each milestone is a working app; 1–3 recreate the daily-driver experience.
   the hover card (interactive, hover-persistent), optimistic with rollback. **Rich text**
   ✅ — outbound facet detection (links/@mentions post correctly) and inbound rendering
   (clickable links/mentions), plus **image embeds** in the card. (Mastotron was read-only;
-  Skynets is not.) **Quote-embed cards** ✅ render inline in the hover card. Later:
-  compose image uploads/alt-text; external-link preview cards.
+  Skynets is not.) **Quote-embed cards** ✅ and **external link-preview cards** ✅ render
+  inline in the hover card. Later: compose image uploads/alt-text.

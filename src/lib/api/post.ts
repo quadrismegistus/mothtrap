@@ -1,4 +1,5 @@
 import {
+  AppBskyEmbedExternal,
   AppBskyEmbedImages,
   AppBskyEmbedRecord,
   AppBskyEmbedRecordWithMedia,
@@ -31,6 +32,25 @@ export function postImages(item: FeedItem): PostImage[] {
     return view.images.map((i) => ({ thumb: i.thumb, alt: i.alt }))
   }
   return []
+}
+
+export interface ExternalCard {
+  uri: string
+  title: string
+  description: string
+  thumb?: string
+}
+
+/** External link-preview card on a post (or record-with-media), if any. */
+export function postExternal(item: FeedItem): ExternalCard | null {
+  const embed = item.post.embed
+  let view: unknown = embed
+  if (AppBskyEmbedRecordWithMedia.isView(embed)) view = embed.media
+  if (AppBskyEmbedExternal.isView(view)) {
+    const e = view.external
+    return { uri: e.uri, title: e.title, description: e.description, thumb: e.thumb }
+  }
+  return null
 }
 
 export interface QuotedPost {

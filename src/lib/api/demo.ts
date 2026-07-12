@@ -29,6 +29,7 @@ interface Spec {
   link?: string
   image?: string
   quote?: { ai: number; text: string }
+  external?: { uri: string; title: string; description: string; thumb?: string }
 }
 
 const DEMO_IMG =
@@ -89,6 +90,17 @@ function make(s: Spec): FeedItem {
       images: [{ thumb: s.image, fullsize: s.image, alt: 'demo image' }],
     }
   }
+  if (s.external) {
+    ;(item.post as Record<string, unknown>).embed = {
+      $type: 'app.bsky.embed.external#view',
+      external: {
+        uri: s.external.uri,
+        title: s.external.title,
+        description: s.external.description,
+        thumb: s.external.thumb,
+      },
+    }
+  }
   if (s.quote) {
     const [qh, qn] = AUTHORS[s.quote.ai]
     ;(item.post as Record<string, unknown>).embed = {
@@ -147,6 +159,7 @@ export function demoFeed(): FeedItem[] {
   specs.push({ id: 'link', ai: 1, text: 'worth a read', link: 'https://docs.bsky.app', likes: 18, reposts: 5, replies: 2, minsAgo: 8 })
   specs.push({ id: 'img', ai: 3, text: 'a photo from today', image: DEMO_IMG, likes: 26, reposts: 7, replies: 3, minsAgo: 14 })
   specs.push({ id: 'quote', ai: 2, text: 'exactly this — well put', quote: { ai: 5, text: 'the map beats the feed, every time' }, likes: 19, reposts: 6, replies: 1, minsAgo: 10 })
+  specs.push({ id: 'ext', ai: 4, text: 'good writeup', external: { uri: 'https://docs.bsky.app/blog', title: 'Building on the AT Protocol', description: 'A guide to client apps, feeds, and the firehose.', thumb: DEMO_IMG }, likes: 14, reposts: 3, replies: 1, minsAgo: 6 })
 
   // A 5-post thread rooted at t0 (tests collapsing + "+N" badge).
   const root = 'at://did:plc:alice.bsky.social/app.bsky.feed.post/t0'

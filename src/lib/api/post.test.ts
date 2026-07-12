@@ -1,6 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkPost } from '../testing'
-import { authorName, bskyUrl, postImages, postQuote, postText, reposter, timeAgo } from './post'
+import {
+  authorName,
+  bskyUrl,
+  postExternal,
+  postImages,
+  postQuote,
+  postText,
+  reposter,
+  timeAgo,
+} from './post'
 import type { FeedItem } from './timeline'
 
 describe('post helpers', () => {
@@ -60,9 +69,24 @@ describe('embeds', () => {
     expect(q?.handle).toBe('a.test')
   })
 
+  it('postExternal reads the link-preview card', () => {
+    const item = {
+      post: {
+        embed: {
+          $type: 'app.bsky.embed.external#view',
+          external: { uri: 'https://ex.com', title: 'T', description: 'D', thumb: 'th' },
+        },
+      },
+    } as unknown as FeedItem
+    const e = postExternal(item)
+    expect(e?.title).toBe('T')
+    expect(e?.uri).toBe('https://ex.com')
+  })
+
   it('are empty/null with no embed', () => {
     expect(postImages(mkPost())).toEqual([])
     expect(postQuote(mkPost())).toBeNull()
+    expect(postExternal(mkPost())).toBeNull()
   })
 })
 
