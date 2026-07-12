@@ -7,6 +7,7 @@ interface Persisted {
   selectMode: SelectMode
   autoCycle: boolean
   cycleInterval: number
+  livePoll: boolean
 }
 
 function load(): Partial<Persisted> {
@@ -28,6 +29,7 @@ class Settings {
   selectMode = $state<SelectMode>('mix')
   autoCycle = $state(false)
   cycleInterval = $state(4)
+  livePoll = $state(true)
 
   constructor() {
     const p = load()
@@ -37,6 +39,7 @@ class Settings {
     }
     if (typeof p.autoCycle === 'boolean') this.autoCycle = p.autoCycle
     if (typeof p.cycleInterval === 'number') this.cycleInterval = p.cycleInterval
+    if (typeof p.livePoll === 'boolean') this.livePoll = p.livePoll
 
     if (typeof localStorage !== 'undefined') {
       $effect.root(() => {
@@ -46,6 +49,7 @@ class Settings {
             selectMode: this.selectMode,
             autoCycle: this.autoCycle,
             cycleInterval: this.cycleInterval,
+            livePoll: this.livePoll,
           }
           localStorage.setItem(KEY, JSON.stringify(data))
         })

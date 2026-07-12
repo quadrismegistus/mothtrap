@@ -175,9 +175,10 @@ jQuery-UI + socket.io + vis-network.
 4. **Threads** ✅ (core) — expanding a collapsed thread now calls `getPostThread` to pull
    in the full conversation (replies not in the timeline), flattened and merged into the
    graph. Still could add: read/unread styling and richer reply-count badges.
-5. **Live + polish** — done early: **OAuth login**, **deployed** to GitHub Pages at
-   ryanheuser.com/skynets/, **open-in-bsky.app** on double-click. Still to do: 60s poll
-   loop (or Jetstream) for live updates, scoring options (e.g. follower-weighting).
+5. **Live + polish** ✅ (mostly) — **OAuth login**, **deployed** to GitHub Pages at
+   ryanheuser.com/skynets/, **open-in-bsky.app** on double-click, and **60s live polling**
+   that slides new posts into the graph (persisted toggle in the config popover). Still
+   optional: Jetstream firehose instead of polling, follower-weighted scoring.
 
 Each milestone is a working app; 1–3 recreate the daily-driver experience.
 

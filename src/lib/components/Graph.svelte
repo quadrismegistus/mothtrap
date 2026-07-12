@@ -167,6 +167,26 @@
     return () => clearInterval(id)
   })
 
+  // Live updates: poll the newest page every 60s and slide in genuinely-new
+  // posts (deduped). Toggle in the config popover; persisted.
+  async function pollNew() {
+    if (loading) return
+    try {
+      const page = await getTimeline()
+      const have = new Set(items.map((i) => i.post.uri))
+      const fresh = page.items.filter((i) => !have.has(i.post.uri))
+      if (fresh.length) items = [...fresh, ...items]
+    } catch {
+      // Transient; the next tick retries.
+    }
+  }
+
+  $effect(() => {
+    if (!settings.livePoll) return
+    const id = setInterval(pollNew, 60_000)
+    return () => clearInterval(id)
+  })
+
   async function load(append: boolean) {
     if (loading) return
     loading = true
@@ -326,6 +346,13 @@
             ? 'Cycling applies to Top/Recent.'
             : `Rotates the ${queued} queued posts through over time.`}
         </p>
+
+        <div class="row">
+          <span class="label">Live</span>
+          <input type="checkbox" bind:checked={settings.livePoll} />
+          <span class="val"></span>
+        </div>
+        <p class="hint">Pull new posts into the graph every 60s.</p>
       </div>
     {/if}
   </div>
