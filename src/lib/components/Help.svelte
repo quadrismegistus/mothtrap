@@ -1,0 +1,172 @@
+<script lang="ts">
+  interface Props {
+    onclose: () => void
+  }
+  let { onclose }: Props = $props()
+
+  function onKey(e: KeyboardEvent) {
+    if (e.key === 'Escape') onclose()
+  }
+</script>
+
+<svelte:window onkeydown={onKey} />
+
+<div class="backdrop" role="button" tabindex="-1" onclick={onclose} onkeydown={onKey}>
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="modal" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()}>
+    <div class="head">
+      <strong>How Skynets works</strong>
+      <button class="close" aria-label="Close" onclick={onclose}>✕</button>
+    </div>
+
+    <p class="intro">
+      Skynets shows your Bluesky timeline as a map of conversations instead of a scrolling
+      feed — so you can triage, not doomscroll.
+    </p>
+
+    <section>
+      <h3>Reading the map</h3>
+      <ul>
+        <li><b>Left → right:</b> older → newer.</li>
+        <li><b>Bottom → top:</b> quieter → louder (likes + reposts + replies).</li>
+        <li><b>Node size:</b> number of replies (conversation size).</li>
+        <li>A thread collapses to one node with a <b>+N</b> badge and a blue ring.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h3>Interacting</h3>
+      <ul>
+        <li><b>Hover</b> a node to read it — the card has reply, repost / quote, and like.</li>
+        <li><b>Click</b> a thread node to unspool its replies; click again to collapse.</li>
+        <li><b>Double-click</b> any node to open it on bsky.app.</li>
+        <li><b>✕</b> (top-right of a node on hover) dismisses it.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h3>Dismissing (“mark as read”)</h3>
+      <ul>
+        <li>A dismissed post is hidden for good — saved on this device, it never comes back.</li>
+        <li>Dismissing a post also dismisses <b>all of its replies</b>.</li>
+        <li>The graph refills from the queue, so the visible count stays steady.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h3>Keyboard</h3>
+      <dl class="keys">
+        <div><kbd>D</kbd><span>Dismiss the hovered post (and its replies)</span></div>
+        <div><kbd>R</kbd><span>Load more posts</span></div>
+        <div><kbd>N</kbd><span>Next batch from the queue</span></div>
+        <div><kbd>L</kbd><span>Jump back to the newest</span></div>
+        <div><kbd>Esc</kbd><span>Close a card, popover, or dialog</span></div>
+        <div><kbd>⌘/Ctrl</kbd><kbd>↵</kbd><span>Send, in the composer</span></div>
+      </dl>
+    </section>
+
+    <section>
+      <h3>Settings (⚙ bottom-left)</h3>
+      <ul>
+        <li><b>Count:</b> how many nodes are shown at once.</li>
+        <li><b>Show:</b> Top (loudest), Recent (newest), or Mix of both.</li>
+        <li><b>Auto-cycle:</b> rotate the queued posts through over time.</li>
+        <li><b>Live:</b> pull in new posts every 60 seconds.</li>
+      </ul>
+    </section>
+  </div>
+</div>
+
+<style>
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: grid;
+    place-items: start center;
+    padding: 8vh 1rem;
+    z-index: 1000;
+    overflow-y: auto;
+  }
+  .modal {
+    width: 100%;
+    max-width: 440px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 1.2rem 1.3rem 1rem;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  }
+  .head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+  }
+  .head strong {
+    font-size: 1.1rem;
+  }
+  .close {
+    padding: 0.2rem 0.5rem;
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+  }
+  .intro {
+    margin: 0 0 0.5rem;
+    color: var(--text-dim);
+    font-size: 0.88rem;
+    line-height: 1.45;
+  }
+  section {
+    margin-top: 1rem;
+  }
+  h3 {
+    margin: 0 0 0.4rem;
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+  }
+  ul {
+    margin: 0;
+    padding-left: 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    font-size: 0.88rem;
+    line-height: 1.4;
+  }
+  b {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .keys {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .keys > div {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.88rem;
+  }
+  .keys span {
+    color: var(--text-dim);
+  }
+  kbd {
+    display: inline-block;
+    min-width: 1.5rem;
+    text-align: center;
+    padding: 0.15rem 0.4rem;
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 0.78rem;
+    font-family: inherit;
+  }
+</style>
