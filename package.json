@@ -11,9 +11,11 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
+    "e2e": "playwright test",
     "gen:metadata": "node scripts/gen-client-metadata.mjs"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
     "@tsconfig/svelte": "^5.0.4",
     "@types/d3-force": "^3.0.10",
