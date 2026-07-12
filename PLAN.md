@@ -182,6 +182,9 @@ jQuery-UI + socket.io + vis-network.
 
 Each milestone is a working app; 1–3 recreate the daily-driver experience.
 
+- **Help/onboarding**: ✅ a "?" button in the top bar opens a Help dialog explaining the
+  map (axes, size, threads), interactions, dismissing, keyboard shortcuts, and settings.
+
 ## 5. Open questions
 
 - **Repo layout**: scaffold the SvelteKit/Vite app at the root of this repo? (Assumed yes.)

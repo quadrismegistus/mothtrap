@@ -112,6 +112,14 @@ test('composing with an image attaches and posts', async ({ page }) => {
   await expect(page.locator('.modal')).toHaveCount(0)
 })
 
+test('help dialog opens and closes', async ({ page }) => {
+  await graphReady(page)
+  await page.locator('.help').click()
+  await expect(page.getByText('How Skynets works')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.getByText('How Skynets works')).toHaveCount(0)
+})
+
 test('settings persist across reload', async ({ page }) => {
   await graphReady(page)
   await page.locator('.gear').click()
