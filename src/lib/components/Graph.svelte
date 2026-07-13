@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getTimeline, type FeedItem } from '../api/timeline'
-  import { bskyUrl, reposter } from '../api/post'
+  import { bskyUrl, reposter, reposterProfile } from '../api/post'
   import {
     buildGraph,
     layoutPositions,
@@ -58,14 +58,24 @@
   // so its unattributed fetched copy displayed as a plain timeline post from
   // a stranger — the root cause of the "unfollowed node, unexplained" saga.
   const feedItems = $derived(
-    items.filter(
-      (i) =>
-        (settings.showReposts || !reposter(i)) &&
-        (!settings.followsOnly ||
+    items.filter((i) => {
+      const rp = reposterProfile(i)
+      if (rp && !settings.showReposts) return false
+      // Pruning: unfollowing takes effect immediately. A repost goes when its
+      // *reposter* (who routed it into your feed) is unfollowed; a plain post
+      // goes when its author is. Only session-confirmed unfollows count —
+      // never a merely-missing viewer field.
+      if (rp && rp.did && follows.knownUnfollowed(rp.did)) return false
+      if (!rp && follows.knownUnfollowed(i.post.author.did)) return false
+      if (settings.followsOnly) {
+        return (
           i.post.author.did === session.did ||
-          reposter(i) !== undefined ||
-          follows.following(i.post.author)),
-    ),
+          rp !== undefined ||
+          follows.following(i.post.author)
+        )
+      }
+      return true
+    }),
   )
 
   // Merge optimistically-posted items (our own new posts/replies) with the feed,
@@ -511,7 +521,7 @@
         </div>
         <p class="hint">
           {settings.selectMode === 'top'
-            ? 'The loudest posts by engagement.'
+            ? 'The loudest posts by engagement per hour.'
             : settings.selectMode === 'recent'
               ? 'The newest posts.'
               : 'The loudest half + the newest half.'}

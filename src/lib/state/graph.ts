@@ -1,6 +1,6 @@
 import { AppBskyFeedPost } from '@atproto/api'
 import type { FeedItem } from '../api/timeline'
-import { postScore } from './score'
+import { postScoreRate } from './score'
 
 export interface GraphNode {
   uri: string
@@ -282,7 +282,7 @@ export function buildGraph(
       const it = members[0]
       units.push({
         item: it,
-        score: postScore(it),
+        score: postScoreRate(it),
         timestamp: timestampOf(it),
         rootUri,
         isThreadRoot: false,
@@ -338,7 +338,7 @@ export function buildGraph(
       }
       const others = members
         .filter((m) => m !== rep)
-        .sort((a, b) => postScore(b) - postScore(a))
+        .sort((a, b) => postScoreRate(b) - postScoreRate(a))
       for (const m of others) {
         if (chosen.size >= budget) break
         if (chosen.has(m.post.uri)) continue
@@ -357,7 +357,7 @@ export function buildGraph(
       for (const m of shown) {
         units.push({
           item: m,
-          score: postScore(m),
+          score: postScoreRate(m),
           timestamp: timestampOf(m),
           rootUri,
           isThreadRoot: m === rep,
@@ -371,7 +371,7 @@ export function buildGraph(
       // Selectable if the conversation holds any primary post.
       units.push({
         item: displayRep,
-        score: Math.max(...members.map(postScore)),
+        score: Math.max(...members.map(postScoreRate)),
         timestamp: Math.max(...members.map(timestampOf)),
         rootUri,
         isThreadRoot: true,

@@ -1,4 +1,4 @@
-import { SvelteMap } from 'svelte/reactivity'
+import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { getProfiles } from '../api/actors'
 import { followUser, unfollowUser } from '../api/interactions'
 
@@ -23,9 +23,18 @@ class Follows {
   // Dids whose follow state has been (or is being) verified via getProfiles —
   // plain Set on purpose: reading it must not retrigger the verify effect.
   #checked = new Set<string>()
+  // Dids the user explicitly unfollowed this session (reactive: the graph
+  // prunes their posts live). Deliberately NOT fed by verify() — discovering
+  // someone was never followed must not silently hide what the feed served.
+  #unfollowed = new SvelteSet<string>()
 
   following(author: Author): boolean {
     return this.#map.get(author.did)?.following ?? !!author.viewer?.following
+  }
+
+  /** True only for an explicit unfollow action this session — safe to prune on. */
+  knownUnfollowed(did: string): boolean {
+    return this.#unfollowed.has(did)
   }
 
   /**
@@ -62,9 +71,15 @@ class Follows {
     if (cur.following) {
       const del = cur.followUri
       this.#map.set(did, { following: false, followUri: undefined })
-      if (del) await unfollowUser(del).catch(() => this.#map.set(did, cur))
+      this.#unfollowed.add(did)
+      if (del)
+        await unfollowUser(del).catch(() => {
+          this.#map.set(did, cur)
+          this.#unfollowed.delete(did)
+        })
     } else {
       this.#map.set(did, { following: true, followUri: cur.followUri })
+      this.#unfollowed.delete(did)
       try {
         const res = await followUser(did)
         this.#map.set(did, { following: true, followUri: res.uri })

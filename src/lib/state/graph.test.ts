@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mkPost } from '../testing'
+import { postScoreRate } from './score'
 import {
   buildGraph,
   layoutPositions,
@@ -206,9 +207,9 @@ describe('buildGraph', () => {
     ]
     const rep = buildGraph(items).nodes[0]
     expect(rep.timestamp).toBe(Date.parse(T(10))) // latest activity
-    // peak engagement = the reply's score (cbrt(51)), not the root's (cbrt(6)).
-    expect(rep.score).toBeCloseTo(Math.cbrt(51), 6)
-    expect(rep.score).toBeGreaterThan(Math.cbrt(6))
+    // peak engagement = the loud reply's velocity, not the root's.
+    expect(rep.score).toBeCloseTo(postScoreRate(items[1]), 6)
+    expect(rep.score).toBeGreaterThan(postScoreRate(items[0]))
   })
 })
 
