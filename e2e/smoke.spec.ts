@@ -152,6 +152,8 @@ test('Map replies expands a thread with edges', async ({ page }) => {
 })
 
 test('follow button toggles on the card', async ({ page }) => {
+  // Unfollowing asks for confirmation — accept it so the toggle proceeds.
+  page.on('dialog', (d) => d.accept())
   await graphReady(page)
   await page.locator('.wrap').first().hover()
   await page.locator('.card').waitFor()
