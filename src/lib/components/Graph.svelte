@@ -18,9 +18,12 @@
   import { ancestors } from '../state/ancestors.svelte'
   import { follows } from '../state/follows.svelte'
   import { session } from '../state/session.svelte'
+  import { digest } from '../state/digest.svelte'
+  import { convoColor } from '../api/llm'
   import { SvelteSet } from 'svelte/reactivity'
   import PostNode from './PostNode.svelte'
   import PostCard from './PostCard.svelte'
+  import DigestPanel from './DigestPanel.svelte'
 
   const PAD_X = 64
   const PAD_TOP = 52
@@ -39,6 +42,7 @@
   // persisted store; turnover offset and popover visibility are ephemeral.
   let turnoverOffset = $state(0)
   let showConfig = $state(false)
+  let showDigest = $state(false)
   const modes: SelectMode[] = ['top', 'recent', 'mix']
 
   let w = $state(0)
@@ -170,6 +174,41 @@
   )
 
   const placedByUri = $derived(new Map(placed.map((p) => [p.node.uri, p])))
+
+  // Conversation annotations: each digest conversation, tinted over the centroid
+  // of its member nodes that are currently on the canvas. A conversation with no
+  // visible members simply isn't drawn (it still lives in the panel). The same
+  // color keys the panel swatch and this overlay so they read as one thing.
+  const annotations = $derived.by(() => {
+    const convos = digest.digest?.conversations ?? []
+    return convos
+      .map((c) => {
+        const pts = c.postUris
+          .map((u) => placedByUri.get(u))
+          .filter((p): p is NonNullable<typeof p> => p != null)
+        if (pts.length === 0) return null
+        const cx = pts.reduce((s, p) => s + p.px, 0) / pts.length
+        const cy = pts.reduce((s, p) => s + p.py, 0) / pts.length
+        // Mark each member node with a colored ring rather than one big tint
+        // blob — a conversation's posts are usually scattered across the axes
+        // (a blob would just cover the canvas), so per-node rings stay legible.
+        const members = pts.map((p) => ({ x: p.px, y: p.py, r: p.size / 2 + 5 }))
+        return { id: c.id, label: c.label, color: convoColor(c.id), cx, cy, members }
+      })
+      .filter((a): a is NonNullable<typeof a> => a !== null)
+  })
+
+  function summarize() {
+    showDigest = true
+    digest.summarize(feedItems)
+  }
+
+  // Click a conversation's exemplar in the panel → pin it and pop its card, so
+  // the reference lands you on the actual node in the map.
+  function focusPost(uri: string) {
+    pinned.add(uri)
+    setHovered(uri)
+  }
 
   // Edges go child (reply) → parent, trimmed to each node's rim and leaving a
   // gap at the parent end for the arrowhead.
@@ -460,6 +499,15 @@
     {/each}
   </svg>
 
+  <!-- Conversation membership rings, painted under the nodes. -->
+  <svg class="annotations" width={w} height={h}>
+    {#each annotations as a (a.id)}
+      {#each a.members as m}
+        <circle cx={m.x} cy={m.y} r={m.r} fill="none" stroke={a.color} />
+      {/each}
+    {/each}
+  </svg>
+
   {#each placed as p (p.node.uri)}
     <PostNode
       node={p.node}
@@ -478,6 +526,12 @@
       ondragmove={onNodeDrag}
       ondragend={onNodeDragEnd}
     />
+  {/each}
+
+  {#each annotations as a (a.id)}
+    <div class="convo-label" style="left: {a.cx}px; top: {a.cy}px; --c: {a.color}">
+      {a.label}
+    </div>
   {/each}
 
   {#each cards as c (c.node.uri)}
@@ -604,10 +658,22 @@
     {#if read.dismissed.size > 0}
       <span class="dismissed-count">{read.dismissed.size} dismissed</span>
     {/if}
+    <button class="digest-btn" onclick={() => (showDigest ? (showDigest = false) : summarize())} title="Summarize conversations">
+      ✦ Digest
+    </button>
     <button class="load-more" onclick={() => load(true)} disabled={loading || !cursor}>
       {loading ? 'Loading…' : 'Load more'}
     </button>
   </div>
+
+  {#if showDigest}
+    <DigestPanel
+      items={feedItems}
+      onclose={() => (showDigest = false)}
+      onsummarize={summarize}
+      onfocus={focusPost}
+    />
+  {/if}
   {#if error && items.length > 0}
     <div class="err-toast">{error}</div>
   {/if}
@@ -624,6 +690,31 @@
     position: absolute;
     inset: 0;
     pointer-events: none;
+  }
+  .annotations {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  .annotations circle {
+    opacity: 0.55;
+    stroke-width: 2.5;
+    stroke-dasharray: 3 4;
+  }
+  .convo-label {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    padding: 0.15rem 0.5rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--c);
+    background: color-mix(in srgb, var(--bg-elev) 82%, transparent);
+    border: 1px solid color-mix(in srgb, var(--c) 55%, transparent);
+    border-radius: 999px;
+    white-space: nowrap;
+    pointer-events: none;
+    user-select: none;
+    backdrop-filter: blur(3px);
   }
   .edges line {
     stroke: var(--text-dim);
@@ -773,6 +864,11 @@
   .dismissed-count {
     color: var(--text-dim);
     font-size: 0.78rem;
+  }
+  .digest-btn {
+    background: color-mix(in srgb, var(--bg-elev) 88%, transparent);
+    backdrop-filter: blur(6px);
+    font-size: 0.82rem;
   }
   .err-toast {
     position: absolute;

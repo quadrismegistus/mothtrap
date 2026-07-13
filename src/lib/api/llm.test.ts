@@ -1,0 +1,117 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { summarizeFeed, exemplars, type Conversation } from './llm'
+import { mkPost } from '../testing'
+
+function apiResponse(payload: unknown) {
+  return {
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    json: async () => ({ content: [{ type: 'text', text: JSON.stringify(payload) }] }),
+    text: async () => '',
+  } as Response
+}
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
+describe('summarizeFeed', () => {
+  it('maps post indices back to URIs and drops out-of-range ones', async () => {
+    const a = mkPost({ uri: 'at://real/1', text: 'one' })
+    const b = mkPost({ uri: 'at://real/2', text: 'two' })
+    const fetchMock = vi.fn().mockResolvedValue(
+      apiResponse({
+        conversations: [
+          { id: 'c1', label: 'Topic', summary: 's', status: 'steady', postIds: [0, 99, 1] },
+        ],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const digest = await summarizeFeed([a, b], { apiKey: 'sk-ant-test', model: 'm' })
+    expect(digest.conversations).toHaveLength(1)
+    expect(digest.conversations[0].postUris).toEqual(['at://real/1', 'at://real/2'])
+  })
+
+  it('drops a conversation whose indices are all out of range', async () => {
+    const a = mkPost({ uri: 'at://real/1' })
+    const fetchMock = vi.fn().mockResolvedValue(
+      apiResponse({
+        conversations: [
+          { id: 'ghost', label: 'Ghost', summary: 's', status: 'heating', postIds: [5] },
+          { id: 'real', label: 'Real', summary: 's', status: 'steady', postIds: [0] },
+        ],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const digest = await summarizeFeed([a], { apiKey: 'sk-ant-test', model: 'm' })
+    expect(digest.conversations.map((c) => c.id)).toEqual(['real'])
+  })
+
+  it('coerces an invalid status to steady', async () => {
+    const a = mkPost({ uri: 'at://real/1' })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        apiResponse({
+          conversations: [{ id: 'c', label: 'L', summary: 's', status: 'nonsense', postIds: [0] }],
+        }),
+      ),
+    )
+    const digest = await summarizeFeed([a], { apiKey: 'sk-ant-test', model: 'm' })
+    expect(digest.conversations[0].status).toBe('steady')
+  })
+
+  it('surfaces a clean error when the model response is truncated', async () => {
+    const a = mkPost({ uri: 'at://real/1' })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({ content: [{ type: 'text', text: '{"conversations":[{"id":"c","postIds":[0,1,' }] }),
+        text: async () => '',
+      } as Response),
+    )
+    await expect(summarizeFeed([a], { apiKey: 'sk-ant-test', model: 'm' })).rejects.toThrow(/cut off/)
+  })
+
+  it('throws with the API status on a non-ok response', async () => {
+    const a = mkPost({ uri: 'at://real/1' })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        statusText: 'Unauthorized',
+        text: async () => 'bad key',
+      } as Response),
+    )
+    await expect(summarizeFeed([a], { apiKey: 'bad', model: 'm' })).rejects.toThrow(/401/)
+  })
+
+  it('returns a demo digest (no network) when no key is given', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const posts = [mkPost({ text: 'a map of the graph layout' }), mkPost({ text: 'dismissing a thread' })]
+    const digest = await summarizeFeed(posts, { apiKey: '', model: 'm' })
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(digest.conversations.length).toBeGreaterThan(0)
+  })
+})
+
+describe('exemplars', () => {
+  it('ranks members by engagement velocity, loudest first', () => {
+    const quiet = mkPost({ uri: 'at://q', likes: 1, createdAt: '2026-07-12T12:00:00.000Z' })
+    const loud = mkPost({ uri: 'at://l', likes: 500, reposts: 200, replies: 80, createdAt: '2026-07-12T12:00:00.000Z' })
+    const byUri = new Map([
+      ['at://q', quiet],
+      ['at://l', loud],
+    ])
+    const convo: Conversation = { id: 'c', label: 'L', summary: '', status: 'steady', postUris: ['at://q', 'at://l'] }
+    expect(exemplars(convo, byUri).map((i) => i.post.uri)).toEqual(['at://l', 'at://q'])
+  })
+})

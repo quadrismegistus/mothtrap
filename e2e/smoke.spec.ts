@@ -236,6 +236,19 @@ test('a card near the bottom is not clipped', async ({ page }) => {
   expect(box.y + box.height).toBeLessThanOrEqual(502)
 })
 
+test('digest button opens the panel and annotates the graph (demo)', async ({ page }) => {
+  await graphReady(page)
+  await page.locator('.digest-btn').click()
+  // The panel opens; with no API key a demo digest renders conversations.
+  await expect(page.locator('.panel')).toBeVisible()
+  await expect(page.locator('.convos > li').first()).toBeVisible()
+  // A conversation label is annotated onto the graph, and clicking an exemplar
+  // pins its node (pops a card).
+  await expect(page.locator('.convo-label').first()).toBeVisible()
+  await page.locator('.convos .ex').first().click()
+  await expect(page.locator('.wrap.pinned')).toHaveCount(1)
+})
+
 test('help dialog opens and closes', async ({ page }) => {
   await graphReady(page)
   await page.locator('.help').click()
