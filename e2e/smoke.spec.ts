@@ -165,6 +165,32 @@ test('follow button toggles on the card', async ({ page }) => {
   await expect(follow).not.toHaveText(before)
 })
 
+test('dragging a node moves it and pins it where dropped', async ({ page }) => {
+  await graphReady(page)
+  // Use the rightmost node: its hover card opens away from it (or flips left),
+  // so the card never covers the node center we need to grab.
+  const wraps = await page.locator('.wrap').all()
+  let node = wraps[0]
+  let before = (await node.boundingBox())!
+  for (const w of wraps) {
+    const b = await w.boundingBox()
+    if (b && b.x > before.x) {
+      node = w
+      before = b
+    }
+  }
+  const cx = before.x + before.width / 2
+  const cy = before.y + before.height / 2
+  await page.mouse.move(cx, cy)
+  await page.mouse.down()
+  await page.mouse.move(cx - 140, cy + 90, { steps: 6 })
+  await page.mouse.up()
+  await expect(node).toHaveClass(/pinned/)
+  const after = (await node.boundingBox())!
+  const dist = Math.hypot(after.x - before.x, after.y - before.y)
+  expect(dist).toBeGreaterThan(60)
+})
+
 test('cluster mode hides the semantic axes', async ({ page }) => {
   await graphReady(page)
   await page.locator('.gear').click()

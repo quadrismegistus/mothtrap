@@ -138,6 +138,29 @@ export class ForceLayout {
     this.sim.alpha(0.7).restart()
   }
 
+  /** Hold a node at (x, y) while the user drags it; keeps the sim warm so
+   * neighbors flow around it. */
+  dragTo(id: string, x: number, y: number) {
+    const n = this.#byId.get(id)
+    if (!n) return
+    n.fx = x
+    n.fy = y
+    n.x = x
+    n.y = y
+    this.sim.alphaTarget(0.12).restart()
+  }
+
+  /** End a drag: cool the sim; release the node unless it should stay fixed
+   * (i.e. it was pinned by the drop). */
+  dragEnd(id: string, keepFixed: boolean) {
+    this.sim.alphaTarget(0)
+    const n = this.#byId.get(id)
+    if (n && !keepFixed) {
+      n.fx = null
+      n.fy = null
+    }
+  }
+
   positions(): Map<string, { x: number; y: number }> {
     const out = new Map<string, { x: number; y: number }>()
     for (const n of this.#nodes) out.set(n.id, { x: n.x ?? n.tx, y: n.y ?? n.ty })

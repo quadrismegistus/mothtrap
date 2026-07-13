@@ -16,6 +16,8 @@
     onclick: (node: GraphNode) => void
     ondblclick: (node: GraphNode) => void
     ondismiss: (uri: string) => void
+    ondragmove: (uri: string, clientX: number, clientY: number) => void
+    ondragend: (uri: string) => void
   }
   let {
     node,
@@ -30,6 +32,8 @@
     onclick,
     ondblclick,
     ondismiss,
+    ondragmove,
+    ondragend,
   }: Props = $props()
 
   const avatar = $derived(node.item.post.author.avatar)
@@ -38,6 +42,29 @@
   function dismiss(e: MouseEvent) {
     e.stopPropagation()
     ondismiss(node.uri)
+  }
+
+  // Drag to reposition: a press that moves ≥ 4px becomes a drag (and the
+  // release must then not count as a click). Window-level listeners so the
+  // drag survives the pointer leaving the node.
+  let dragMoved = false
+  function onPointerDown(e: PointerEvent) {
+    if (e.button !== 0) return
+    dragMoved = false
+    const startX = e.clientX
+    const startY = e.clientY
+    const move = (ev: PointerEvent) => {
+      if (!dragMoved && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 4) return
+      dragMoved = true
+      ondragmove(node.uri, ev.clientX, ev.clientY)
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      if (dragMoved) ondragend(node.uri)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
   }
 </script>
 
@@ -51,6 +78,7 @@
   role="group"
   onmouseenter={() => onhover(node.uri)}
   onmouseleave={() => onhover(null)}
+  onpointerdown={onPointerDown}
 >
   {#if repost}
     <span class="reposter" title="Reposted by {repost.name}">
@@ -65,8 +93,8 @@
     class="node"
     class:replies={hasReplies}
     aria-label={authorName(node.item)}
-    onclick={() => onclick(node)}
-    ondblclick={() => ondblclick(node)}
+    onclick={() => !dragMoved && onclick(node)}
+    ondblclick={() => !dragMoved && ondblclick(node)}
   >
     {#if avatar}
       <img src={avatar} alt={authorName(node.item)} />
@@ -74,10 +102,6 @@
       <span class="initial">{authorName(node.item).charAt(0).toUpperCase()}</span>
     {/if}
   </button>
-
-  {#if pinned}
-    <span class="pin" aria-hidden="true">📌</span>
-  {/if}
 
   {#if node.collapsedCount > 0}
     <span class="badge" title="{node.collapsedCount} more in thread — click to expand"
@@ -94,12 +118,14 @@
   .wrap {
     position: absolute;
     transform: translate(-50%, -50%);
+    touch-action: none; /* pointer-drag on touch devices */
   }
   .node {
     width: 100%;
     height: 100%;
     padding: 0;
     border-radius: 50%;
+    cursor: grab;
     border: 2px solid var(--border);
     background: var(--bg-elev);
     overflow: hidden;
@@ -138,14 +164,6 @@
   .wrap.unfollowed img,
   .wrap.unfollowed .initial {
     opacity: 0.5;
-  }
-  .pin {
-    position: absolute;
-    bottom: -8px;
-    left: -6px;
-    font-size: 0.7rem;
-    z-index: 55;
-    pointer-events: none;
   }
   /* Repost: the reposter tucked behind the reposted post's top-left shoulder. */
   .reposter {

@@ -317,6 +317,18 @@
     else pinned.add(node.uri)
   }
 
+  // Dragging a node holds it under the pointer (the sim flows around it) and
+  // pins it where it's dropped; click a pinned node to release it.
+  let graphEl: HTMLDivElement
+  function onNodeDrag(uri: string, clientX: number, clientY: number) {
+    const r = graphEl.getBoundingClientRect()
+    layout?.dragTo(uri, clientX - r.left, clientY - r.top)
+  }
+  function onNodeDragEnd(uri: string) {
+    pinned.add(uri)
+    layout?.dragEnd(uri, true)
+  }
+
   // Expansion is keyed by the clicked post's own uri (stable as the group grows);
   // buildGraph expands a conversation if any of its members' uri is in `expanded`.
   // The fetch is scoped to the clicked post (its replies + its ancestor chain),
@@ -406,7 +418,7 @@
 
 <svelte:window onkeydown={onKey} />
 
-<div class="graph" bind:clientWidth={w} bind:clientHeight={h}>
+<div class="graph" bind:this={graphEl} bind:clientWidth={w} bind:clientHeight={h}>
   {#if !settings.clusterForce}
     <div class="axis y-axis">louder ↑ · ↓ quieter</div>
     <div class="axis x-axis">← older · newer →</div>
@@ -453,6 +465,8 @@
       onclick={onNodeClick}
       ondblclick={onNodeDblClick}
       ondismiss={dismiss}
+      ondragmove={onNodeDrag}
+      ondragend={onNodeDragEnd}
     />
   {/each}
 
