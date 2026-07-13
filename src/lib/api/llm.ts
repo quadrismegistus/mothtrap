@@ -177,15 +177,23 @@ function userContent(items: FeedItem[], previous?: Digest): string {
   return `Posts:\n${promptLines(items)}${prevJson}`
 }
 
+/** Called with the accumulated raw model text as it streams in (Ollama path). */
+export type OnProgress = (rawText: string) => void
+
 /**
  * Summarize a feed into conversations. In demo mode — or when the chosen
  * provider isn't configured (no Anthropic key) — returns a deterministic offline
- * digest so the UI and e2e work without a network call.
+ * digest so the UI and e2e work without a network call. When `onProgress` is
+ * given, the Ollama path streams raw text back as it generates.
  */
-export async function summarizeFeed(items: FeedItem[], opts: SummarizeOpts): Promise<Digest> {
+export async function summarizeFeed(
+  items: FeedItem[],
+  opts: SummarizeOpts,
+  onProgress?: OnProgress,
+): Promise<Digest> {
   if (isDemo()) return demoDigest(items)
   const content = userContent(items, opts.previous)
-  if (opts.provider === 'ollama') return summarizeOllama(items, content, opts)
+  if (opts.provider === 'ollama') return summarizeOllama(items, content, opts, onProgress)
   if (!opts.apiKey) return demoDigest(items)
   return summarizeAnthropic(items, content, opts)
 }
@@ -217,8 +225,14 @@ async function summarizeAnthropic(items: FeedItem[], content: string, opts: Summ
   return coerceDigest(extractJson(text), items)
 }
 
-async function summarizeOllama(items: FeedItem[], content: string, opts: SummarizeOpts): Promise<Digest> {
+async function summarizeOllama(
+  items: FeedItem[],
+  content: string,
+  opts: SummarizeOpts,
+  onProgress?: OnProgress,
+): Promise<Digest> {
   const base = (opts.ollamaUrl || DEFAULT_OLLAMA_URL).replace(/\/$/, '')
+  const stream = !!onProgress
   let res: Response
   try {
     res = await fetch(`${base}/api/chat`, {
@@ -226,7 +240,7 @@ async function summarizeOllama(items: FeedItem[], content: string, opts: Summari
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         model: opts.model,
-        stream: false,
+        stream,
         // Constrain output to the schema — the local model can't return
         // unparseable JSON — and lift the default 2048 context so a full feed
         // isn't silently truncated.
@@ -254,8 +268,43 @@ async function summarizeOllama(items: FeedItem[], content: string, opts: Summari
     const detail = await res.text().catch(() => '')
     throw new Error(`Ollama ${res.status}: ${detail.slice(0, 200) || res.statusText}`)
   }
-  const data = (await res.json()) as { message?: { content?: string } }
-  return coerceDigest(extractJson(data.message?.content ?? ''), items)
+
+  if (!stream || !res.body) {
+    const data = (await res.json()) as { message?: { content?: string } }
+    return coerceDigest(extractJson(data.message?.content ?? ''), items)
+  }
+
+  // Streaming: Ollama emits newline-delimited JSON, each line a chunk with an
+  // incremental `message.content` token. Accumulate the content and report it
+  // as it grows; `thinking` should never appear (we set think:false) but if it
+  // does, surface it so a leaked reasoning trace is visible, not silent.
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  let full = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    let nl: number
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim()
+      buf = buf.slice(nl + 1)
+      if (!line) continue
+      let obj: { message?: { content?: string; thinking?: string }; error?: string }
+      try {
+        obj = JSON.parse(line)
+      } catch {
+        continue
+      }
+      if (obj.error) throw new Error(`Ollama: ${obj.error}`)
+      if (obj.message?.thinking) full += obj.message.thinking
+      const piece = obj.message?.content ?? ''
+      if (piece) full += piece
+      if (piece || obj.message?.thinking) onProgress?.(full)
+    }
+  }
+  return coerceDigest(extractJson(full), items)
 }
 
 /** Exemplar posts for a conversation, loudest-by-velocity first. */

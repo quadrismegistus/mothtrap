@@ -27,6 +27,17 @@
     cooling: '▼',
     steady: '■',
   }
+
+  // Elapsed timer while a summary is in flight — the point of the raw stream is
+  // to see how fast this actually is.
+  let elapsed = $state(0)
+  $effect(() => {
+    if (!digest.loading) return
+    const start = Date.now()
+    elapsed = 0
+    const id = setInterval(() => (elapsed = (Date.now() - start) / 1000), 100)
+    return () => clearInterval(id)
+  })
 </script>
 
 <aside class="panel">
@@ -101,33 +112,45 @@
     <p class="err">{digest.error}</p>
   {/if}
 
-  {#if convos.length === 0 && !digest.loading}
+  {#if digest.loading}
+    <div class="stream-wrap">
+      <div class="stream-head">
+        <span>{digest.streamText ? 'streaming…' : 'waiting for first token…'}</span>
+        <span class="clock">{elapsed.toFixed(1)}s · {digest.streamText.length} chars</span>
+      </div>
+      {#if digest.streamText}
+        <pre class="stream">{digest.streamText}</pre>
+      {/if}
+    </div>
+  {:else if convos.length === 0}
     <p class="empty">No digest yet — press Summarize.</p>
   {/if}
 
-  <ul class="convos">
-    {#each convos as c (c.id)}
-      <li>
-        <div class="head" style="--c: {convoColor(c.id)}">
-          <span class="swatch"></span>
-          <span class="title">{c.label}</span>
-          <span class="status {c.status}" title={c.status}>{statusMark[c.status]}</span>
-          <span class="count">{c.postUris.length}</span>
-        </div>
-        <p class="summary">{c.summary}</p>
-        <ul class="exemplars">
-          {#each exemplars(c, byUri) as ex (ex.post.uri)}
-            <li>
-              <button class="ex" onclick={() => onfocus(ex.post.uri)}>
-                <span class="who">@{ex.post.author.handle}{reposter(ex) ? ' ↻' : ''}</span>
-                <span class="body">{text(ex).slice(0, 120)}</span>
-              </button>
-            </li>
-          {/each}
-        </ul>
-      </li>
-    {/each}
-  </ul>
+  {#if !digest.loading}
+    <ul class="convos">
+      {#each convos as c (c.id)}
+        <li>
+          <div class="head" style="--c: {convoColor(c.id)}">
+            <span class="swatch"></span>
+            <span class="title">{c.label}</span>
+            <span class="status {c.status}" title={c.status}>{statusMark[c.status]}</span>
+            <span class="count">{c.postUris.length}</span>
+          </div>
+          <p class="summary">{c.summary}</p>
+          <ul class="exemplars">
+            {#each exemplars(c, byUri) as ex (ex.post.uri)}
+              <li>
+                <button class="ex" onclick={() => onfocus(ex.post.uri)}>
+                  <span class="who">@{ex.post.author.handle}{reposter(ex) ? ' ↻' : ''}</span>
+                  <span class="body">{text(ex).slice(0, 120)}</span>
+                </button>
+              </li>
+            {/each}
+          </ul>
+        </li>
+      {/each}
+    </ul>
+  {/if}
 </aside>
 
 <style>
@@ -251,6 +274,38 @@
   }
   .empty {
     padding: 1rem 0.9rem;
+    color: var(--text-dim);
+  }
+  .stream-wrap {
+    padding: 0.7rem 0.9rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    min-height: 0;
+    flex: 1 1 0;
+  }
+  .stream-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: var(--text-dim);
+    font-size: 0.72rem;
+  }
+  .clock {
+    font-variant-numeric: tabular-nums;
+  }
+  .stream {
+    margin: 0;
+    padding: 0.5rem 0.6rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    font-size: 0.68rem;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-y: auto;
+    flex: 1 1 0;
     color: var(--text-dim);
   }
   .convos {

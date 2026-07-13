@@ -42,6 +42,8 @@ class DigestState {
   digest = $state<Digest | undefined>(undefined)
   loading = $state(false)
   error = $state<string | undefined>(undefined)
+  /** Raw model text as it streams in (Ollama), shown until the parse replaces it. */
+  streamText = $state('')
   /** When the last digest was produced, for the panel's "as of" note. */
   ranAt = $state<number | undefined>(undefined)
 
@@ -71,19 +73,25 @@ class DigestState {
     if (this.loading || items.length === 0) return
     this.loading = true
     this.error = undefined
+    this.streamText = ''
     try {
-      this.digest = await summarizeFeed(items, {
-        provider: this.provider,
-        model: this.provider === 'ollama' ? this.ollamaModel : this.model,
-        apiKey: this.apiKey,
-        ollamaUrl: this.ollamaUrl,
-        previous: this.digest,
-      })
+      this.digest = await summarizeFeed(
+        items,
+        {
+          provider: this.provider,
+          model: this.provider === 'ollama' ? this.ollamaModel : this.model,
+          apiKey: this.apiKey,
+          ollamaUrl: this.ollamaUrl,
+          previous: this.digest,
+        },
+        (raw) => (this.streamText = raw),
+      )
       this.ranAt = Date.now()
     } catch (err) {
       this.error = err instanceof Error ? err.message : 'Summary failed'
     } finally {
       this.loading = false
+      this.streamText = ''
     }
   }
 
