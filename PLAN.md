@@ -198,6 +198,17 @@ jQuery-UI + socket.io + vis-network.
    that slides new posts into the graph (persisted toggle in the config popover). Still
    optional: Jetstream firehose instead of polling, follower-weighted scoring.
 
+6. **Backlog (not critical)** — from Dan Abramov's atproto AMA (2026-07-13):
+   - **Granular OAuth scopes**: replace the legacy `transition:generic` catch-all with
+     the granular permission scopes (create/delete records for post/like/repost/follow,
+     blob upload, feed reads) so the consent screen honestly describes what Skynets can
+     do and a leaked browser token carries less blast radius.
+   - **Jetstream live mode**: replace the 60s `getTimeline` poll with a Jetstream
+     websocket subscription filtered by `wantedDids` (your ~600 follows fit its limits)
+     so new posts slide into the graph the moment they're made — no polling, no auth
+     needed for public data. Needs: subscribe, filter to `app.bsky.feed.post` commits,
+     hydrate post views, refresh the did list when follows change.
+
 Each milestone is a working app; 1–3 recreate the daily-driver experience.
 
 - **Help/onboarding**: ✅ a "?" button in the top bar opens a Help dialog explaining the
