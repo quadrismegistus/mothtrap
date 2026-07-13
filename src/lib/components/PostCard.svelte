@@ -75,6 +75,7 @@
   }
 
   let repostMenu = $state(false)
+  let copied = $state(false)
   const isSelf = $derived(item.post.author.did === session.did)
   const following = $derived(follows.following(item.post.author))
 
@@ -105,9 +106,11 @@
         const raw = JSON.stringify(item, null, 2)
         navigator.clipboard?.writeText(raw)
         console.log('[skynets] raw feed item\n' + raw)
+        copied = true
+        setTimeout(() => (copied = false), 1500)
       }}
     >
-      🧭 {context}
+      🧭 {copied ? 'copied raw data ✓' : context}
     </button>
   {/if}
   <div class="head">
