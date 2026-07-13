@@ -228,6 +228,17 @@
     if (wanted.size) ancestors.ensure([...wanted])
   })
 
+  // Any author about to render dashed (unfollowed) gets their follow state
+  // verified against the authoritative profile record, once per session —
+  // so a feed/thread response that omitted viewer.following can't leave a
+  // followed account falsely dashed.
+  $effect(() => {
+    const suspects = visibleNodes
+      .map((n) => n.item.post.author)
+      .filter((a) => a.did !== session.did && !follows.following(a))
+    if (suspects.length) follows.verify(suspects)
+  })
+
   // Keep the graph full: when the queue runs dry (fewer posts loaded than the
   // node limit) and more can be fetched, pull the next page. This is what makes
   // dismissing a post backfill the next one so the visible count holds steady.
@@ -310,14 +321,15 @@
     return nodeByUri.get(item.post.uri)?.expanded ?? expanded.has(item.post.uri)
   }
 
-  // Why a post is in the graph, shown on its card — timeline posts need no
-  // label (and reposts already get a "reposted by" line), but pulled-in
-  // context should explain itself.
+  // Why a post is in the graph, shown on its card. Every post gets a label so
+  // an unfamiliar face is always explainable in place — "in your timeline" on
+  // an author you don't follow (and no repost line) would itself be a signal
+  // that something is off.
   const ownUris = $derived(new Set(compose.injected.map((i) => i.post.uri)))
   const timelineUris = $derived(new Set(items.map((i) => i.post.uri)))
-  function whyHere(uri: string): string | undefined {
+  function whyHere(uri: string): string {
     if (ownUris.has(uri)) return 'your post'
-    if (timelineUris.has(uri)) return undefined
+    if (timelineUris.has(uri)) return 'in your timeline'
     if (threads.posts.some((p) => p.post.uri === uri)) return 'from a mapped thread'
     return 'context — a post upstream of your timeline'
   }

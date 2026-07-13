@@ -1,4 +1,5 @@
 import { SvelteMap } from 'svelte/reactivity'
+import { getProfiles } from '../api/actors'
 import { followUser, unfollowUser } from '../api/interactions'
 
 interface FollowState {
@@ -19,9 +20,37 @@ interface Author {
  */
 class Follows {
   #map = new SvelteMap<string, FollowState>()
+  // Dids whose follow state has been (or is being) verified via getProfiles —
+  // plain Set on purpose: reading it must not retrigger the verify effect.
+  #checked = new Set<string>()
 
   following(author: Author): boolean {
     return this.#map.get(author.did)?.following ?? !!author.viewer?.following
+  }
+
+  /**
+   * Verify follow state against the authoritative profile record (batched,
+   * once per did per session). Feed/thread responses *should* carry
+   * `viewer.following`, but a missing one silently marks a followed account as
+   * unfollowed (dashed) — this self-corrects that within a beat.
+   */
+  async verify(authors: Author[]) {
+    const dids = [...new Set(authors.map((a) => a.did))].filter((d) => !this.#checked.has(d))
+    if (!dids.length) return
+    for (const d of dids) this.#checked.add(d)
+    for (let i = 0; i < dids.length; i += 25) {
+      const chunk = dids.slice(i, i + 25)
+      try {
+        for (const p of await getProfiles(chunk)) {
+          // Don't clobber an optimistic toggle already in the overlay.
+          if (this.#map.has(p.did)) continue
+          const f = p.viewer?.following
+          this.#map.set(p.did, { following: !!f, followUri: f })
+        }
+      } catch {
+        for (const d of chunk) this.#checked.delete(d) // retry on a later pass
+      }
+    }
   }
 
   async toggle(author: Author) {
