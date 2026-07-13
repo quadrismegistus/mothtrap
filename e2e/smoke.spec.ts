@@ -165,7 +165,7 @@ test('follow button toggles on the card', async ({ page }) => {
   await expect(follow).not.toHaveText(before)
 })
 
-test('dragging a node moves it and pins it where dropped', async ({ page }) => {
+test('dragging moves a node without pinning; a click pins it', async ({ page }) => {
   await graphReady(page)
   // Use the rightmost node: its hover card opens away from it (or flips left),
   // so the card never covers the node center we need to grab.
@@ -185,10 +185,15 @@ test('dragging a node moves it and pins it where dropped', async ({ page }) => {
   await page.mouse.down()
   await page.mouse.move(cx - 140, cy + 90, { steps: 6 })
   await page.mouse.up()
-  await expect(node).toHaveClass(/pinned/)
+  // Dragging moves the node but does NOT pin it (it drifts back on its own).
+  await expect(node).not.toHaveClass(/pinned/)
   const after = (await node.boundingBox())!
   const dist = Math.hypot(after.x - before.x, after.y - before.y)
   expect(dist).toBeGreaterThan(60)
+  // A normal click pins it where it is.
+  const b2 = (await node.boundingBox())!
+  await page.mouse.click(b2.x + b2.width / 2, b2.y + b2.height / 2)
+  await expect(node).toHaveClass(/pinned/)
 })
 
 test('cluster mode hides the semantic axes', async ({ page }) => {

@@ -317,16 +317,16 @@
     else pinned.add(node.uri)
   }
 
-  // Dragging a node holds it under the pointer (the sim flows around it) and
-  // pins it where it's dropped; click a pinned node to release it.
+  // Dragging a node holds it under the pointer (the sim flows around it).
+  // Releasing lets it drift back to its semantic spot — unless it's pinned
+  // (by a normal click), in which case it stays where it was dropped.
   let graphEl: HTMLDivElement
   function onNodeDrag(uri: string, clientX: number, clientY: number) {
     const r = graphEl.getBoundingClientRect()
     layout?.dragTo(uri, clientX - r.left, clientY - r.top)
   }
   function onNodeDragEnd(uri: string) {
-    pinned.add(uri)
-    layout?.dragEnd(uri, true)
+    layout?.dragEnd(uri, pinned.has(uri))
   }
 
   // Expansion is keyed by the clicked post's own uri (stable as the group grows);
