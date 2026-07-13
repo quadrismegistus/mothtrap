@@ -51,19 +51,21 @@
   const expanded = new SvelteSet<string>()
   const pinned = new SvelteSet<string>()
 
-  // "Follows only" gates the timeline to accounts you follow (plus their
-  // reposts and your own posts) — Bluesky's following feed occasionally serves
-  // reason-less posts from unfollowed accounts (observed live), and this
-  // excludes whatever it injects rather than displaying it unexplained.
+  // The single source of truth for what counts as "your feed": the Reposts
+  // and Follows-only toggles apply HERE, before anything downstream (primary
+  // status, provenance, ancestor-fetching) is derived. Filtering later (as
+  // `visible` once did) let a hidden repost leak its uri into the primary set,
+  // so its unattributed fetched copy displayed as a plain timeline post from
+  // a stranger — the root cause of the "unfollowed node, unexplained" saga.
   const feedItems = $derived(
-    settings.followsOnly
-      ? items.filter(
-          (i) =>
-            i.post.author.did === session.did ||
-            reposter(i) !== undefined ||
-            follows.following(i.post.author),
-        )
-      : items,
+    items.filter(
+      (i) =>
+        (settings.showReposts || !reposter(i)) &&
+        (!settings.followsOnly ||
+          i.post.author.did === session.did ||
+          reposter(i) !== undefined ||
+          follows.following(i.post.author)),
+    ),
   )
 
   // Merge optimistically-posted items (our own new posts/replies) with the feed,
@@ -75,11 +77,7 @@
   const primarySources = $derived([...compose.injected, ...feedItems])
   const allItems = $derived([...primarySources, ...threads.posts, ...ancestors.posts])
   const primaryUris = $derived(new Set(primarySources.map((i) => i.post.uri)))
-  const visible = $derived(
-    allItems.filter(
-      (i) => !read.isDismissed(i.post.uri) && (settings.showReposts || !reposter(i)),
-    ),
-  )
+  const visible = $derived(allItems.filter((i) => !read.isDismissed(i.post.uri)))
   const graph = $derived(buildGraph(visible, expanded, primaryUris))
 
   // Only primary nodes compete for the window, so the queue/turnover counts

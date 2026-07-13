@@ -44,16 +44,26 @@ Post-fix screenshots (2026-07-13, dev server) surfaced a second round, same PR:
    ("from a mapped thread" / "context — a post upstream of your timeline"), so
    an unfamiliar face is explainable in place.
 
-Round three (the horse/Doctorow case) closed the loop: provenance read
-**"in your timeline"** with no repost line, and the new authoritative
-`getProfiles` verification confirmed *not followed* — i.e. Bluesky's own
-following feed served a post from an unfollowed account. Most likely a recent
-(possibly accidental, via the card's one-click Following button) unfollow that
-the feed hadn't caught up with. Mitigation: unfollow now asks for
-confirmation; follow state of any dashed author is verified authoritatively
-once per session. If "in your timeline + dashed + no repost line" recurs on an
-account the user never followed, that would be a genuine feed anomaly worth
-capturing (uri + timestamp).
+Round three (the horse/Doctorow case) delivered the FINAL root cause, via the
+click-to-copy raw JSON instrument + the official bsky.app feed:
+
+**A followee (Stuart Semmel) had reposted posts of Doctorow's thread — the
+feed item was legitimate and attributed. But the Reposts toggle filtered the
+attributed copy out in `visible`, downstream of where `primaryUris` and
+`timelineUris` were built (from raw `items`). The hidden repost leaked its uri
+into the primary set; the bare `{post}` context copy fetched by
+Connect/Map-replies (no `reason`, no `viewer.following`) then displayed as a
+primary "in your timeline" post by an unfollowed stranger, with no repost
+attribution — the recurring "unfollowed node, unexplained" in its final form.**
+
+Fix: `feedItems` is the single filtered source of truth (Reposts + Follows-only
+toggles apply there); primary status, provenance, and ancestor-fetching all
+derive from it. With Reposts off, repost-only authors now vanish entirely;
+with Reposts on, they show attributed (mini reposter avatar + card line).
+
+Along the way (all real, all shipped): unfollow asks for confirmation; dashed
+authors get authoritative `getProfiles` verification; every card carries a
+click-to-copy provenance line; and a "Follows only" toggle gates the feed.
 
 The original write-up follows for the record.
 
