@@ -38,7 +38,9 @@
       <h3>Interacting</h3>
       <ul>
         <li><b>Hover</b> a node to read it — the card has reply, repost / quote, and like.</li>
-        <li><b>Click</b> a thread node to unspool its replies; click again to collapse.</li>
+        <li><b>Click</b> a node to pin it (orange ring: it stays put, card stays open); click again to release.</li>
+        <li><b>Drag</b> a node to nudge it around — it drifts back unless pinned.</li>
+        <li><b>Map replies</b> on a card unspools the conversation around that post.</li>
         <li><b>Double-click</b> any node to open it on bsky.app.</li>
         <li><b>✕</b> (top-right of a node on hover) dismisses it.</li>
       </ul>

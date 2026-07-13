@@ -84,14 +84,32 @@ export function postQuote(item: FeedItem): QuotedPost | null {
   return null
 }
 
+export interface ReposterProfile {
+  name: string
+  avatar?: string
+  did: string
+  handle: string
+  viewer?: { following?: string }
+}
+
 /** The reposter's profile, if this feed item is a repost. */
-export function reposterProfile(
-  item: FeedItem,
-): { name: string; avatar?: string } | undefined {
+export function reposterProfile(item: FeedItem): ReposterProfile | undefined {
   const reason = item.reason
   if (reason && reason.$type === 'app.bsky.feed.defs#reasonRepost') {
-    const by = reason.by as { displayName?: string; handle?: string; avatar?: string }
-    return { name: by.displayName || by.handle || '', avatar: by.avatar }
+    const by = reason.by as {
+      did?: string
+      handle?: string
+      displayName?: string
+      avatar?: string
+      viewer?: { following?: string }
+    }
+    return {
+      name: by.displayName || by.handle || '',
+      avatar: by.avatar,
+      did: by.did ?? '',
+      handle: by.handle ?? '',
+      viewer: by.viewer,
+    }
   }
   return undefined
 }

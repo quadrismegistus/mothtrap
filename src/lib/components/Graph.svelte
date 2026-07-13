@@ -1,11 +1,10 @@
 <script lang="ts">
   import { getTimeline, type FeedItem } from '../api/timeline'
-  import { bskyUrl, reposter } from '../api/post'
+  import { bskyUrl, reposter, reposterProfile } from '../api/post'
   import {
     buildGraph,
     layoutPositions,
     parentUriOf,
-    rootUriOf,
     selectVisible,
     threadDescendants,
     type GraphNode,
@@ -52,21 +51,48 @@
   const expanded = new SvelteSet<string>()
   const pinned = new SvelteSet<string>()
 
+  // The single source of truth for what counts as "your feed": the Reposts
+  // and Follows-only toggles apply HERE, before anything downstream (primary
+  // status, provenance, ancestor-fetching) is derived. Filtering later (as
+  // `visible` once did) let a hidden repost leak its uri into the primary set,
+  // so its unattributed fetched copy displayed as a plain timeline post from
+  // a stranger — the root cause of the "unfollowed node, unexplained" saga.
+  const feedItems = $derived(
+    items.filter((i) => {
+      const rp = reposterProfile(i)
+      if (rp && !settings.showReposts) return false
+      // Pruning: unfollowing takes effect immediately. A repost goes when its
+      // *reposter* (who routed it into your feed) is unfollowed; a plain post
+      // goes when its author is. Only session-confirmed unfollows count —
+      // never a merely-missing viewer field.
+      if (rp && rp.did && follows.knownUnfollowed(rp.did)) return false
+      if (!rp && follows.knownUnfollowed(i.post.author.did)) return false
+      if (settings.followsOnly) {
+        return (
+          i.post.author.did === session.did ||
+          rp !== undefined ||
+          follows.following(i.post.author)
+        )
+      }
+      return true
+    }),
+  )
+
   // Merge optimistically-posted items (our own new posts/replies) with the feed,
   // then drop dismissed ones. buildGraph dedupes by uri.
-  // Primary sources (your feed, mapped threads, your own posts) come before the
-  // fetched reply-parents so a real post wins dedup and counts as "primary".
-  const primarySources = $derived([...compose.injected, ...threads.posts, ...items])
-  const allItems = $derived([...primarySources, ...ancestors.posts])
+  // Primary = your own posts + your timeline; fetched thread posts and reply
+  // parents are pulled-in *context* that only ever appears attached (mapped or
+  // chained), never on its own. Primary sources come first so a timeline copy
+  // of a post wins dedup over a fetched one.
+  const primarySources = $derived([...compose.injected, ...feedItems])
+  const allItems = $derived([...primarySources, ...threads.posts, ...ancestors.posts])
   const primaryUris = $derived(new Set(primarySources.map((i) => i.post.uri)))
-  const visible = $derived(
-    allItems.filter(
-      (i) => !read.isDismissed(i.post.uri) && (settings.showReposts || !reposter(i)),
-    ),
-  )
+  const visible = $derived(allItems.filter((i) => !read.isDismissed(i.post.uri)))
   const graph = $derived(buildGraph(visible, expanded, primaryUris))
 
-  const total = $derived(graph.nodes.length)
+  // Only primary nodes compete for the window, so the queue/turnover counts
+  // are over them; context nodes ride along and don't inflate the numbers.
+  const total = $derived(graph.nodes.filter((n) => n.primary).length)
   const queued = $derived(total <= settings.nodeLimit ? 0 : total - settings.nodeLimit)
 
   // Which nodes to show (top/recent/mix), plus pinned nodes and — when "connect
@@ -225,6 +251,17 @@
     if (wanted.size) ancestors.ensure([...wanted])
   })
 
+  // Any author about to render dashed (unfollowed) gets their follow state
+  // verified against the authoritative profile record, once per session —
+  // so a feed/thread response that omitted viewer.following can't leave a
+  // followed account falsely dashed.
+  $effect(() => {
+    const suspects = visibleNodes
+      .map((n) => n.item.post.author)
+      .filter((a) => a.did !== session.did && !follows.following(a))
+    if (suspects.length) follows.verify(suspects)
+  })
+
   // Keep the graph full: when the queue runs dry (fewer posts loaded than the
   // node limit) and more can be fetched, pull the next page. This is what makes
   // dismissing a post backfill the next one so the visible count holds steady.
@@ -290,19 +327,52 @@
     else pinned.add(node.uri)
   }
 
+  // Dragging a node holds it under the pointer (the sim flows around it).
+  // Releasing lets it drift back to its semantic spot — unless it's pinned
+  // (by a normal click), in which case it stays where it was dropped.
+  let graphEl: HTMLDivElement
+  function onNodeDrag(uri: string, clientX: number, clientY: number) {
+    const r = graphEl.getBoundingClientRect()
+    layout?.dragTo(uri, clientX - r.left, clientY - r.top)
+  }
+  function onNodeDragEnd(uri: string) {
+    layout?.dragEnd(uri, pinned.has(uri))
+  }
+
   // Expansion is keyed by the clicked post's own uri (stable as the group grows);
   // buildGraph expands a conversation if any of its members' uri is in `expanded`.
+  // The fetch is scoped to the clicked post (its replies + its ancestor chain),
+  // not the whole root thread, so mapping stays about the post you clicked.
   function toggleMapReplies(item: FeedItem) {
     const uri = item.post.uri
     if (expanded.has(uri)) {
       expanded.delete(uri)
     } else {
       expanded.add(uri)
-      threads.ensure(rootUriOf(item)) // pull replies not already in the timeline
+      threads.ensure(uri) // pull replies not already in the timeline
     }
   }
   function repliesMapped(item: FeedItem): boolean {
     return nodeByUri.get(item.post.uri)?.expanded ?? expanded.has(item.post.uri)
+  }
+
+  // Why a post is in the graph, shown on its card. Pulled-in context always
+  // explains itself (an unfamiliar face should never be a mystery); ordinary
+  // timeline/own posts are only labeled in Debug mode, where the line also
+  // click-copies the raw post JSON.
+  const ownUris = $derived(new Set(compose.injected.map((i) => i.post.uri)))
+  const timelineUris = $derived(new Set(feedItems.map((i) => i.post.uri)))
+  function whyHere(node: GraphNode): string | undefined {
+    const uri = node.uri
+    if (ownUris.has(uri)) return settings.debugMode ? 'your post' : undefined
+    if (timelineUris.has(uri)) {
+      // A reason we couldn't attribute (no reposter name) would otherwise
+      // masquerade as a plain timeline post — call it out regardless of mode.
+      if (node.item.reason && !reposter(node.item)) return 'in your timeline — unattributed repost'
+      return settings.debugMode ? 'in your timeline' : undefined
+    }
+    if (threads.posts.some((p) => p.post.uri === uri)) return 'from a mapped thread'
+    return 'context — a post upstream of your timeline'
   }
 
   function dismiss(uri: string) {
@@ -358,7 +428,7 @@
 
 <svelte:window onkeydown={onKey} />
 
-<div class="graph" bind:clientWidth={w} bind:clientHeight={h}>
+<div class="graph" bind:this={graphEl} bind:clientWidth={w} bind:clientHeight={h}>
   {#if !settings.clusterForce}
     <div class="axis y-axis">louder ↑ · ↓ quieter</div>
     <div class="axis x-axis">← older · newer →</div>
@@ -405,6 +475,8 @@
       onclick={onNodeClick}
       ondblclick={onNodeDblClick}
       ondismiss={dismiss}
+      ondragmove={onNodeDrag}
+      ondragend={onNodeDragEnd}
     />
   {/each}
 
@@ -416,6 +488,7 @@
       boundsH={h}
       canMapReplies={c.node.isThreadRoot || (c.node.item.post.replyCount ?? 0) > 0}
       repliesMapped={repliesMapped(c.node.item)}
+      context={whyHere(c.node)}
       onreply={(it) => compose.openReply(it)}
       onquote={(it) => compose.openQuote(it)}
       onmapreplies={toggleMapReplies}
@@ -448,7 +521,7 @@
         </div>
         <p class="hint">
           {settings.selectMode === 'top'
-            ? 'The loudest posts by engagement.'
+            ? 'The loudest posts by engagement per hour.'
             : settings.selectMode === 'recent'
               ? 'The newest posts.'
               : 'The loudest half + the newest half.'}
@@ -509,6 +582,20 @@
           <span class="val"></span>
         </div>
         <p class="hint">Include reposts from people you follow.</p>
+
+        <div class="row">
+          <span class="label">Follows only</span>
+          <input type="checkbox" bind:checked={settings.followsOnly} />
+          <span class="val"></span>
+        </div>
+        <p class="hint">Hide feed posts from accounts you don't follow (Bluesky sometimes serves them).</p>
+
+        <div class="row">
+          <span class="label">Debug</span>
+          <input type="checkbox" bind:checked={settings.debugMode} />
+          <span class="val"></span>
+        </div>
+        <p class="hint">Label every card's provenance; click the 🧭 line to copy the raw post JSON.</p>
       </div>
     {/if}
   </div>

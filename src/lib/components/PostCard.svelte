@@ -8,7 +8,7 @@
     postImages,
     postQuote,
     postText,
-    reposter,
+    reposterProfile,
     timeAgo,
     type QuotedPost,
   } from '../api/post'
@@ -16,6 +16,7 @@
   import { interactions } from '../state/interactions.svelte'
   import { follows } from '../state/follows.svelte'
   import { session } from '../state/session.svelte'
+  import { settings } from '../state/settings.svelte'
 
   interface Props {
     item: FeedItem
@@ -26,6 +27,8 @@
     boundsH: number
     canMapReplies: boolean
     repliesMapped: boolean
+    /** Why this post is in the graph (pulled-in context); undefined for timeline posts. */
+    context?: string
     onreply: (item: FeedItem) => void
     onquote: (item: FeedItem) => void
     onmapreplies: (item: FeedItem) => void
@@ -39,6 +42,7 @@
     boundsH,
     canMapReplies,
     repliesMapped,
+    context,
     onreply,
     onquote,
     onmapreplies,
@@ -51,7 +55,12 @@
   let cardH = $state(0)
   const top = $derived(Math.max(8, Math.min(y, boundsH - cardH - 8)))
 
-  const rt = $derived(reposter(item))
+  const rt = $derived(reposterProfile(item))
+  const rtFollowing = $derived(rt && rt.did ? follows.following(rt) : false)
+  function toggleReposter() {
+    if (!rt || !rt.did) return
+    if (!rtFollowing || confirm(`Unfollow @${rt.handle}?`)) follows.toggle(rt)
+  }
   const liked = $derived(interactions.liked(item))
   const reposted = $derived(interactions.reposted(item))
   const textSegs = $derived(segments(postText(item), postFacets(item)))
@@ -72,6 +81,7 @@
   }
 
   let repostMenu = $state(false)
+  let copied = $state(false)
   const isSelf = $derived(item.post.author.did === session.did)
   const following = $derived(follows.following(item.post.author))
 
@@ -92,7 +102,33 @@
   onmouseleave={onleave}
 >
   {#if rt}
-    <div class="repost">🔁 reposted by {rt}</div>
+    <div class="repost">
+      🔁 reposted by {rt.name}
+      {#if rt.did && rt.did !== session.did}
+        <button class="rt-follow" onclick={toggleReposter}>
+          {rtFollowing ? 'unfollow' : 'follow'}
+        </button>
+      {/if}
+    </div>
+  {/if}
+  {#if context}
+    {#if settings.debugMode}
+      <button
+        class="why"
+        title="Why this post is in the graph — click to copy its raw feed data"
+        onclick={() => {
+          const raw = JSON.stringify(item, null, 2)
+          navigator.clipboard?.writeText(raw)
+          console.log('[skynets] raw feed item\n' + raw)
+          copied = true
+          setTimeout(() => (copied = false), 1500)
+        }}
+      >
+        🧭 {copied ? 'copied raw data ✓' : context}
+      </button>
+    {:else}
+      <div class="repost">🧭 {context}</div>
+    {/if}
   {/if}
   <div class="head">
     {#if item.post.author.avatar}
@@ -106,7 +142,14 @@
       <button
         class="follow"
         class:following
-        onclick={() => follows.toggle(item.post.author)}
+        onclick={() => {
+          // Unfollowing is easy to hit by accident and quietly reshapes the
+          // whole graph (the account's posts start rendering as strangers'),
+          // so it asks; following stays one click.
+          if (!following || confirm(`Unfollow @${item.post.author.handle}?`)) {
+            follows.toggle(item.post.author)
+          }
+        }}
       >
         {following ? 'Following' : 'Follow'}
       </button>
@@ -242,6 +285,35 @@
     font-size: 0.72rem;
     color: var(--text-dim);
     margin-bottom: 0.45rem;
+  }
+  /* Reposter follow/unfollow: deliberately small and muted — a pruning tool,
+   * not a call to action. */
+  .rt-follow {
+    margin-left: 0.35rem;
+    padding: 0.05rem 0.45rem;
+    font-size: 0.68rem;
+    border-radius: 999px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+  .rt-follow:hover {
+    color: var(--text);
+    border-color: var(--text-dim);
+  }
+  .why {
+    display: block;
+    padding: 0;
+    border: none;
+    background: transparent;
+    text-align: left;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    margin-bottom: 0.45rem;
+    cursor: pointer;
+  }
+  .why:hover {
+    color: var(--text);
   }
   .head {
     display: flex;

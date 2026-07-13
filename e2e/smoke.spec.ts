@@ -151,16 +151,57 @@ test('Map replies expands a thread with edges', async ({ page }) => {
   expect(await page.locator('.edges line').count()).toBeGreaterThan(0)
 })
 
-test('follow button toggles on the card', async ({ page }) => {
+test('follow button toggles; unfollowing prunes the author from the graph', async ({ page }) => {
+  // Unfollowing asks for confirmation — accept it so the toggle proceeds.
+  page.on('dialog', (d) => d.accept())
   await graphReady(page)
-  await page.locator('.wrap').first().hover()
+  // A non-repost node: unfollowing its author prunes their plain feed posts.
+  const node = page.locator('.wrap:not(:has(.reposter))').first()
+  const name = await node.locator('button.node').getAttribute('aria-label')
+  await node.hover()
   await page.locator('.card').waitFor()
   await page.locator('.card').hover()
   const follow = page.locator('.card .follow').first()
   await follow.waitFor()
   const before = (await follow.textContent())!.trim()
   await follow.click()
-  await expect(follow).not.toHaveText(before)
+  if (before === 'Following') {
+    // The unfollowed author's posts leave the graph immediately.
+    await expect(page.locator(`button.node[aria-label="${name}"]`)).toHaveCount(0)
+  } else {
+    await expect(follow).toHaveText('Following')
+  }
+})
+
+test('dragging moves a node without pinning; a click pins it', async ({ page }) => {
+  await graphReady(page)
+  // Use the rightmost node: its hover card opens away from it (or flips left),
+  // so the card never covers the node center we need to grab.
+  const wraps = await page.locator('.wrap').all()
+  let node = wraps[0]
+  let before = (await node.boundingBox())!
+  for (const w of wraps) {
+    const b = await w.boundingBox()
+    if (b && b.x > before.x) {
+      node = w
+      before = b
+    }
+  }
+  const cx = before.x + before.width / 2
+  const cy = before.y + before.height / 2
+  await page.mouse.move(cx, cy)
+  await page.mouse.down()
+  await page.mouse.move(cx - 140, cy + 90, { steps: 6 })
+  await page.mouse.up()
+  // Dragging moves the node but does NOT pin it (it drifts back on its own).
+  await expect(node).not.toHaveClass(/pinned/)
+  const after = (await node.boundingBox())!
+  const dist = Math.hypot(after.x - before.x, after.y - before.y)
+  expect(dist).toBeGreaterThan(60)
+  // A normal click pins it where it is.
+  const b2 = (await node.boundingBox())!
+  await page.mouse.click(b2.x + b2.width / 2, b2.y + b2.height / 2)
+  await expect(node).toHaveClass(/pinned/)
 })
 
 test('cluster mode hides the semantic axes', async ({ page }) => {

@@ -1,6 +1,6 @@
 import { AppBskyFeedPost } from '@atproto/api'
 import type { FeedItem } from '../api/timeline'
-import { postScore } from './score'
+import { postScoreRate } from './score'
 
 export interface GraphNode {
   uri: string
@@ -16,6 +16,10 @@ export interface GraphNode {
   collapsedCount: number
   /** True if this node's conversation is currently expanded (mapped). */
   expanded: boolean
+  /** True if this post is yours or from your timeline — pulled-in context
+   * (reply parents, fetched thread replies) is false and never competes for
+   * screen slots on its own; it only appears attached. */
+  primary: boolean
 }
 
 /** Normalized layout position in [0,1], computed per visible set (not baked in). */
@@ -106,6 +110,11 @@ function windowSlice<T>(sorted: T[], limit: number, offset: number): T[] {
  * - `mix`: the loudest half + the newest half (deduped).
  * `offset` rotates the top/recent window (the turnover queue). Members of an
  * expanded thread are always included so unspooling never hides part of a thread.
+ *
+ * Only *primary* nodes compete for the window — pulled-in context (reply
+ * parents, fetched thread posts) is never shown on its own merits; it appears
+ * only via expansion (below) or the connect-replies ancestor chain, so an
+ * unfollowed parent can't surface alone without the reply that brought it in.
  */
 export function selectVisible(
   nodes: GraphNode[],
@@ -113,12 +122,13 @@ export function selectVisible(
   limit: number,
   offset: number,
 ): GraphNode[] {
+  const pool = nodes.filter((n) => n.primary)
   let chosen: GraphNode[]
-  if (nodes.length <= limit) {
-    chosen = nodes
+  if (pool.length <= limit) {
+    chosen = pool
   } else if (mode === 'mix') {
-    const byScore = [...nodes].sort((a, b) => b.score - a.score)
-    const byTime = [...nodes].sort((a, b) => b.timestamp - a.timestamp)
+    const byScore = [...pool].sort((a, b) => b.score - a.score)
+    const byTime = [...pool].sort((a, b) => b.timestamp - a.timestamp)
     const recentHalf = Math.floor(limit / 2)
     const picked = new Map<string, GraphNode>()
     for (const n of byScore) {
@@ -133,8 +143,8 @@ export function selectVisible(
   } else {
     const sorted =
       mode === 'recent'
-        ? [...nodes].sort((a, b) => b.timestamp - a.timestamp)
-        : [...nodes].sort((a, b) => b.score - a.score)
+        ? [...pool].sort((a, b) => b.timestamp - a.timestamp)
+        : [...pool].sort((a, b) => b.score - a.score)
     chosen = windowSlice(sorted, limit, offset)
   }
 
@@ -198,6 +208,7 @@ interface Unit {
   isThreadRoot: boolean
   collapsedCount: number
   expanded: boolean
+  primary: boolean
 }
 
 /**
@@ -256,30 +267,34 @@ export function buildGraph(
 
   const units: Unit[] = []
   for (const [rootUri, members] of groups) {
-    // Drop conversations that are pure pulled-in context (no primary post of
-    // your own / from your timeline) — so a fetched reply-parent never floats
-    // alone; it only appears attached to a post that's actually in your feed.
-    if (primary && !members.some((m) => primary.has(m.post.uri))) continue
-
     // Expansion is keyed by *membership* (any member's uri was clicked to map),
     // which stays stable as fetched replies merge the group and shift its key.
     const isExpanded = members.some((m) => expanded.has(m.post.uri))
+    const isPrimary = (m: FeedItem) => !primary || primary.has(m.post.uri)
+
+    // Drop conversations that are pure pulled-in context (no primary post of
+    // your own / from your timeline) — so a fetched reply-parent never floats
+    // alone; it only appears attached to a post that's actually in your feed.
+    // Expanded groups are kept regardless: the user explicitly mapped them.
+    if (!isExpanded && !members.some(isPrimary)) continue
 
     if (members.length === 1) {
       const it = members[0]
       units.push({
         item: it,
-        score: postScore(it),
+        score: postScoreRate(it),
         timestamp: timestampOf(it),
         rootUri,
         isThreadRoot: false,
         collapsedCount: 0,
         expanded: isExpanded,
+        primary: isPrimary(it),
       })
       continue
     }
-    // Representative: the conversation's entry point (a member with no parent in
-    // the group), preferring the earliest; else just the earliest.
+    // Structural representative: the conversation's entry point (a member with
+    // no parent in the group), preferring the earliest; else just the earliest.
+    // Used to anchor the tree when showing members as connected nodes.
     const uris = inGroup(members)
     const tops = members.filter((m) => {
       const p = parentUriOf(m)
@@ -288,39 +303,81 @@ export function buildGraph(
     const pool = tops.length ? tops : members
     const rep = pool.reduce((a, b) => (timestampOf(a) <= timestampOf(b) ? a : b))
 
+    // Display representative for a *collapsed* group: prefer the earliest
+    // primary member — the post that actually earned this conversation a place
+    // in your graph — so a collapsed thread never wears the face of a pulled-in
+    // stranger (the structural top is often an unfollowed root author).
+    const primaries = members.filter(isPrimary)
+    const displayRep = primaries.length
+      ? primaries.reduce((a, b) => (timestampOf(a) <= timestampOf(b) ? a : b))
+      : rep
+
     // Small threads (or explicitly expanded ones) show as connected nodes;
     // larger threads collapse to one node unless the user maps their replies.
     const collapse = members.length >= COLLAPSE_MIN && !isExpanded
 
     if (!collapse) {
-      // Show the root + only the loudest replies, so a huge thread can't flood
-      // the graph. The rep keeps a "+N" badge for any replies beyond the cap.
+      // Show the rep + the loudest replies, so a huge thread can't flood the
+      // graph — but never orphan a shown reply from the conversation: each
+      // pick brings its not-yet-shown ancestors along, so the shown subset is
+      // always a connected subtree (slicing purely by loudness used to cut the
+      // quiet bridge replies and leave the loud ones floating disconnected).
+      const memberByUri = new Map(members.map((m) => [m.post.uri, m]))
+      const budget = 1 + MAX_THREAD_REPLIES
+      const chosen = new Set<string>([rep.post.uri])
+      // Seed with the explicitly clicked posts (and their ancestor paths):
+      // whatever the user asked to map must be shown, budget notwithstanding.
+      for (const m of members) {
+        if (!expanded.has(m.post.uri)) continue
+        let cur: FeedItem | undefined = m
+        while (cur && !chosen.has(cur.post.uri)) {
+          chosen.add(cur.post.uri)
+          const p = parentUriOf(cur)
+          cur = p ? memberByUri.get(p) : undefined
+        }
+      }
       const others = members
         .filter((m) => m !== rep)
-        .sort((a, b) => postScore(b) - postScore(a))
-      const shown = others.slice(0, MAX_THREAD_REPLIES)
-      const hidden = others.length - shown.length
-      for (const m of [rep, ...shown]) {
+        .sort((a, b) => postScoreRate(b) - postScoreRate(a))
+      for (const m of others) {
+        if (chosen.size >= budget) break
+        if (chosen.has(m.post.uri)) continue
+        const path: string[] = []
+        let cur: FeedItem | undefined = m
+        while (cur && !chosen.has(cur.post.uri) && !path.includes(cur.post.uri)) {
+          path.push(cur.post.uri)
+          const p = parentUriOf(cur)
+          cur = p ? memberByUri.get(p) : undefined
+        }
+        if (chosen.size + path.length > budget) continue // a shorter chain may still fit
+        for (const u of path) chosen.add(u)
+      }
+      const shown = members.filter((m) => chosen.has(m.post.uri))
+      const hidden = members.length - shown.length
+      for (const m of shown) {
         units.push({
           item: m,
-          score: postScore(m),
+          score: postScoreRate(m),
           timestamp: timestampOf(m),
           rootUri,
           isThreadRoot: m === rep,
           collapsedCount: m === rep ? hidden : 0,
           expanded: isExpanded,
+          primary: isPrimary(m),
         })
       }
     } else {
       // Collapsed: one node, placed by peak engagement + latest activity.
+      // Selectable if the conversation holds any primary post.
       units.push({
-        item: rep,
-        score: Math.max(...members.map(postScore)),
+        item: displayRep,
+        score: Math.max(...members.map(postScoreRate)),
         timestamp: Math.max(...members.map(timestampOf)),
         rootUri,
         isThreadRoot: true,
         collapsedCount: members.length - 1,
         expanded: false,
+        primary: primaries.length > 0,
       })
     }
   }
@@ -336,6 +393,7 @@ export function buildGraph(
     isThreadRoot: u.isThreadRoot,
     collapsedCount: u.collapsedCount,
     expanded: u.expanded,
+    primary: u.primary,
   }))
 
   const present = new Set(nodes.map((n) => n.uri))
