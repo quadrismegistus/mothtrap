@@ -346,20 +346,20 @@
     return nodeByUri.get(item.post.uri)?.expanded ?? expanded.has(item.post.uri)
   }
 
-  // Why a post is in the graph, shown on its card. Every post gets a label so
-  // an unfamiliar face is always explainable in place — "in your timeline" on
-  // an author you don't follow (and no repost line) would itself be a signal
-  // that something is off.
+  // Why a post is in the graph, shown on its card. Pulled-in context always
+  // explains itself (an unfamiliar face should never be a mystery); ordinary
+  // timeline/own posts are only labeled in Debug mode, where the line also
+  // click-copies the raw post JSON.
   const ownUris = $derived(new Set(compose.injected.map((i) => i.post.uri)))
   const timelineUris = $derived(new Set(feedItems.map((i) => i.post.uri)))
-  function whyHere(node: GraphNode): string {
+  function whyHere(node: GraphNode): string | undefined {
     const uri = node.uri
-    if (ownUris.has(uri)) return 'your post'
+    if (ownUris.has(uri)) return settings.debugMode ? 'your post' : undefined
     if (timelineUris.has(uri)) {
       // A reason we couldn't attribute (no reposter name) would otherwise
-      // masquerade as a plain timeline post — call it out instead.
+      // masquerade as a plain timeline post — call it out regardless of mode.
       if (node.item.reason && !reposter(node.item)) return 'in your timeline — unattributed repost'
-      return 'in your timeline'
+      return settings.debugMode ? 'in your timeline' : undefined
     }
     if (threads.posts.some((p) => p.post.uri === uri)) return 'from a mapped thread'
     return 'context — a post upstream of your timeline'
@@ -579,6 +579,13 @@
           <span class="val"></span>
         </div>
         <p class="hint">Hide feed posts from accounts you don't follow (Bluesky sometimes serves them).</p>
+
+        <div class="row">
+          <span class="label">Debug</span>
+          <input type="checkbox" bind:checked={settings.debugMode} />
+          <span class="val"></span>
+        </div>
+        <p class="hint">Label every card's provenance; click the 🧭 line to copy the raw post JSON.</p>
       </div>
     {/if}
   </div>
