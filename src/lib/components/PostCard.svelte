@@ -98,7 +98,17 @@
     <div class="repost">🔁 reposted by {rt}</div>
   {/if}
   {#if context}
-    <div class="repost">🧭 {context}</div>
+    <button
+      class="why"
+      title="Why this post is in the graph — click to copy its raw feed data (for debugging)"
+      onclick={() => {
+        const raw = JSON.stringify(item, null, 2)
+        navigator.clipboard?.writeText(raw)
+        console.log('[skynets] raw feed item\n' + raw)
+      }}
+    >
+      🧭 {context}
+    </button>
   {/if}
   <div class="head">
     {#if item.post.author.avatar}
@@ -255,6 +265,20 @@
     font-size: 0.72rem;
     color: var(--text-dim);
     margin-bottom: 0.45rem;
+  }
+  .why {
+    display: block;
+    padding: 0;
+    border: none;
+    background: transparent;
+    text-align: left;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    margin-bottom: 0.45rem;
+    cursor: pointer;
+  }
+  .why:hover {
+    color: var(--text);
   }
   .head {
     display: flex;

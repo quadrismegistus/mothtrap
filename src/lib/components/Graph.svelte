@@ -327,9 +327,15 @@
   // that something is off.
   const ownUris = $derived(new Set(compose.injected.map((i) => i.post.uri)))
   const timelineUris = $derived(new Set(items.map((i) => i.post.uri)))
-  function whyHere(uri: string): string {
+  function whyHere(node: GraphNode): string {
+    const uri = node.uri
     if (ownUris.has(uri)) return 'your post'
-    if (timelineUris.has(uri)) return 'in your timeline'
+    if (timelineUris.has(uri)) {
+      // A reason we couldn't attribute (no reposter name) would otherwise
+      // masquerade as a plain timeline post — call it out instead.
+      if (node.item.reason && !reposter(node.item)) return 'in your timeline — unattributed repost'
+      return 'in your timeline'
+    }
     if (threads.posts.some((p) => p.post.uri === uri)) return 'from a mapped thread'
     return 'context — a post upstream of your timeline'
   }
@@ -445,7 +451,7 @@
       boundsH={h}
       canMapReplies={c.node.isThreadRoot || (c.node.item.post.replyCount ?? 0) > 0}
       repliesMapped={repliesMapped(c.node.item)}
-      context={whyHere(c.node.uri)}
+      context={whyHere(c.node)}
       onreply={(it) => compose.openReply(it)}
       onquote={(it) => compose.openQuote(it)}
       onmapreplies={toggleMapReplies}
