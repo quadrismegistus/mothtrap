@@ -1,23 +1,44 @@
-import { DEFAULT_MODEL, summarizeFeed, type Digest } from '../api/llm'
+import {
+  DEFAULT_MODEL,
+  DEFAULT_OLLAMA_MODEL,
+  DEFAULT_OLLAMA_URL,
+  summarizeFeed,
+  type Digest,
+  type Provider,
+} from '../api/llm'
 import type { FeedItem } from '../api/timeline'
 
-const MODEL_KEY = 'skynets.llm.model'
+const KEY = 'skynets.llm'
 
-function loadModel(): string {
-  if (typeof localStorage === 'undefined') return DEFAULT_MODEL
-  return localStorage.getItem(MODEL_KEY) ?? DEFAULT_MODEL
+interface Persisted {
+  provider: Provider
+  model: string
+  ollamaModel: string
+  ollamaUrl: string
+}
+
+function load(): Partial<Persisted> {
+  if (typeof localStorage === 'undefined') return {}
+  try {
+    return JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<Persisted>
+  } catch {
+    return {}
+  }
 }
 
 /**
- * LLM digest state (PLAN §6 Phase E, minimal slice). The API key is held in
- * memory only — never persisted — for the first slice: re-enter per session,
- * which is the safe default given the app's rich-content XSS surface. The model
- * choice (non-sensitive) is persisted. The digest is kept as `previous` and fed
- * back on the next call so conversation labels stay stable.
+ * LLM digest state (PLAN §6 Phase E, minimal slice). The Anthropic API key is
+ * held in memory only — never persisted — the safe default given the app's
+ * rich-content XSS surface; re-enter per session. Everything non-sensitive
+ * (provider choice, model names, the Ollama URL) IS persisted. The digest is
+ * kept as `previous` and fed back on the next call so labels stay stable.
  */
 class DigestState {
   apiKey = $state('')
-  model = $state(loadModel())
+  provider = $state<Provider>('anthropic')
+  model = $state(DEFAULT_MODEL)
+  ollamaModel = $state(DEFAULT_OLLAMA_MODEL)
+  ollamaUrl = $state(DEFAULT_OLLAMA_URL)
   digest = $state<Digest | undefined>(undefined)
   loading = $state(false)
   error = $state<string | undefined>(undefined)
@@ -25,9 +46,23 @@ class DigestState {
   ranAt = $state<number | undefined>(undefined)
 
   constructor() {
+    const p = load()
+    if (p.provider === 'anthropic' || p.provider === 'ollama') this.provider = p.provider
+    if (typeof p.model === 'string') this.model = p.model
+    if (typeof p.ollamaModel === 'string') this.ollamaModel = p.ollamaModel
+    if (typeof p.ollamaUrl === 'string') this.ollamaUrl = p.ollamaUrl
+
     if (typeof localStorage !== 'undefined') {
       $effect.root(() => {
-        $effect(() => localStorage.setItem(MODEL_KEY, this.model))
+        $effect(() => {
+          const data: Persisted = {
+            provider: this.provider,
+            model: this.model,
+            ollamaModel: this.ollamaModel,
+            ollamaUrl: this.ollamaUrl,
+          }
+          localStorage.setItem(KEY, JSON.stringify(data))
+        })
       })
     }
   }
@@ -38,8 +73,10 @@ class DigestState {
     this.error = undefined
     try {
       this.digest = await summarizeFeed(items, {
+        provider: this.provider,
+        model: this.provider === 'ollama' ? this.ollamaModel : this.model,
         apiKey: this.apiKey,
-        model: this.model,
+        ollamaUrl: this.ollamaUrl,
         previous: this.digest,
       })
       this.ranAt = Date.now()

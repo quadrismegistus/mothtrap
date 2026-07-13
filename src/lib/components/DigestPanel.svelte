@@ -1,6 +1,6 @@
 <script lang="ts">
   import { digest } from '../state/digest.svelte'
-  import { convoColor, exemplars, MODELS, type Conversation } from '../api/llm'
+  import { convoColor, exemplars, MODELS, OLLAMA_MODELS, type Conversation } from '../api/llm'
   import { reposter } from '../api/post'
   import type { FeedItem } from '../api/timeline'
   import { AppBskyFeedPost } from '@atproto/api'
@@ -16,6 +16,7 @@
 
   const byUri = $derived(new Map(items.map((i) => [i.post.uri, i])))
   const convos = $derived(digest.digest?.conversations ?? [])
+  const originHint = typeof location !== 'undefined' ? location.origin : 'http://localhost:1997'
 
   function text(item: FeedItem): string {
     const rec = item.post.record
@@ -35,29 +36,65 @@
   </header>
 
   <div class="controls">
-    <label class="field">
-      <span>Anthropic key</span>
-      <input
-        type="password"
-        placeholder="sk-ant-… (kept in memory only)"
-        bind:value={digest.apiKey}
-        autocomplete="off"
-      />
-    </label>
-    <div class="row">
-      <select bind:value={digest.model}>
-        {#each MODELS as m}
-          <option value={m.id}>{m.label}</option>
-        {/each}
-      </select>
-      <button class="go" onclick={onsummarize} disabled={digest.loading || items.length === 0}>
-        {digest.loading ? 'Reading…' : digest.digest ? 'Re-summarize' : 'Summarize'}
+    <div class="seg">
+      <button class:on={digest.provider === 'anthropic'} onclick={() => (digest.provider = 'anthropic')}>
+        Anthropic
+      </button>
+      <button class:on={digest.provider === 'ollama'} onclick={() => (digest.provider = 'ollama')}>
+        Ollama (local)
       </button>
     </div>
-    <p class="note">
-      Sends the {items.length} posts in view to Anthropic. The key stays in this tab's memory only
-      (re-enter next session); without one, a demo digest is shown.
-    </p>
+
+    {#if digest.provider === 'anthropic'}
+      <label class="field">
+        <span>Anthropic key</span>
+        <input
+          type="password"
+          placeholder="sk-ant-… (kept in memory only)"
+          bind:value={digest.apiKey}
+          autocomplete="off"
+        />
+      </label>
+      <div class="row">
+        <select bind:value={digest.model}>
+          {#each MODELS as m}
+            <option value={m.id}>{m.label}</option>
+          {/each}
+        </select>
+        <button class="go" onclick={onsummarize} disabled={digest.loading || items.length === 0}>
+          {digest.loading ? 'Reading…' : digest.digest ? 'Re-summarize' : 'Summarize'}
+        </button>
+      </div>
+      <p class="note">
+        Sends the {items.length} posts in view to Anthropic. The key stays in this tab's memory only
+        (re-enter next session); without one, a demo digest is shown.
+      </p>
+    {:else}
+      <label class="field">
+        <span>Model</span>
+        <input list="ollama-models" bind:value={digest.ollamaModel} placeholder="llama3.1:8b" autocomplete="off" />
+        <datalist id="ollama-models">
+          {#each OLLAMA_MODELS as m}
+            <option value={m.id}>{m.label}</option>
+          {/each}
+        </datalist>
+      </label>
+      <label class="field">
+        <span>Ollama URL</span>
+        <input bind:value={digest.ollamaUrl} placeholder="http://localhost:11434" autocomplete="off" />
+      </label>
+      <div class="row">
+        <button class="go wide" onclick={onsummarize} disabled={digest.loading || items.length === 0}>
+          {digest.loading ? 'Reading…' : digest.digest ? 'Re-summarize' : 'Summarize'}
+        </button>
+      </div>
+      <p class="note">
+        Runs locally — nothing leaves your machine. Start Ollama with the app's origin allowed
+        (<code>OLLAMA_ORIGINS={originHint} ollama serve</code>) and pull the model first
+        (<code>ollama pull {digest.ollamaModel || 'llama3.1:8b'}</code>). Only works when Skynets is
+        served over http://localhost — a deployed https page can't reach local Ollama.
+      </p>
+    {/if}
   </div>
 
   {#if digest.error}
@@ -156,6 +193,26 @@
     flex: 1 1 0;
     min-width: 0;
   }
+  .seg {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .seg button {
+    flex: 1 1 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    padding: 0.35rem 0.5rem;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    cursor: pointer;
+  }
+  .seg button.on {
+    background: var(--accent);
+    color: #fff;
+  }
   .go {
     flex: none;
     background: var(--accent);
@@ -165,6 +222,16 @@
     padding: 0.35rem 0.8rem;
     font-size: 0.8rem;
     cursor: pointer;
+  }
+  .go.wide {
+    flex: 1 1 0;
+  }
+  .note code {
+    background: var(--bg);
+    border-radius: 4px;
+    padding: 0 0.25rem;
+    font-size: 0.66rem;
+    word-break: break-all;
   }
   .go:disabled {
     opacity: 0.5;

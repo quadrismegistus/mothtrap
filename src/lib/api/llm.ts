@@ -26,7 +26,10 @@ export interface Digest {
   conversations: Conversation[]
 }
 
-/** Cheapest current model — the sane default for a per-fetch summary. */
+/** Where the digest is computed: Anthropic's cloud (BYO key) or a local Ollama. */
+export type Provider = 'anthropic' | 'ollama'
+
+/** Cheapest current cloud model — the sane default for a per-fetch summary. */
 export const DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
 
 export const MODELS: { id: string; label: string }[] = [
@@ -35,7 +38,44 @@ export const MODELS: { id: string; label: string }[] = [
   { id: 'claude-opus-4-8', label: 'Opus 4.8' },
 ]
 
+/** Default local model + endpoint. llama3.1:8b (~5GB Q4) fits a 16GB machine
+ * and follows the JSON instruction reliably; swap in the panel for others. */
+export const DEFAULT_OLLAMA_MODEL = 'llama3.1:8b'
+export const DEFAULT_OLLAMA_URL = 'http://localhost:11434'
+
+/** Suggested local models, ordered by appetite, for the panel's datalist. */
+export const OLLAMA_MODELS: { id: string; label: string }[] = [
+  { id: 'llama3.1:8b', label: 'llama3.1:8b — ~5GB, needs 16GB RAM' },
+  { id: 'qwen2.5:7b', label: 'qwen2.5:7b — ~5GB, strong at JSON' },
+  { id: 'qwen3:4b', label: 'qwen3:4b — ~3GB, for 8GB RAM' },
+  { id: 'gemma3:4b', label: 'gemma3:4b — ~3GB, for 8GB RAM' },
+  { id: 'gemma3:12b', label: 'gemma3:12b — ~8GB, needs a GPU/32GB' },
+]
+
 const ENDPOINT = 'https://api.anthropic.com/v1/messages'
+
+/** JSON schema for the digest, handed to Ollama's `format` so the local model
+ * is constrained to valid, parseable output (no truncation/parse fragility). */
+const DIGEST_SCHEMA = {
+  type: 'object',
+  properties: {
+    conversations: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          label: { type: 'string' },
+          summary: { type: 'string' },
+          status: { type: 'string', enum: ['heating', 'cooling', 'steady'] },
+          postIds: { type: 'array', items: { type: 'integer' } },
+        },
+        required: ['id', 'label', 'summary', 'status', 'postIds'],
+      },
+    },
+  },
+  required: ['conversations'],
+} as const
 
 function postText(item: FeedItem): string {
   const rec = item.post.record
@@ -116,43 +156,56 @@ function coerceDigest(raw: unknown, items: FeedItem[]): Digest {
 }
 
 export interface SummarizeOpts {
-  apiKey: string
+  provider: Provider
   model: string
   previous?: Digest
+  /** Anthropic only. */
+  apiKey?: string
+  /** Ollama only. */
+  ollamaUrl?: string
+}
+
+/** The user-turn content: the numbered feed plus, optionally, the prior
+ * conversation labels (id+label only — the old post indices are stale). */
+function userContent(items: FeedItem[], previous?: Digest): string {
+  const prevJson = previous
+    ? `\n\nPrevious conversations (reuse id+label if the topic continues):\n${JSON.stringify(
+        previous.conversations.map((c) => ({ id: c.id, label: c.label })),
+      )}`
+    : ''
+  return `Posts:\n${promptLines(items)}${prevJson}`
 }
 
 /**
- * Summarize a feed into conversations. In demo mode (or with no key) returns a
- * deterministic offline digest so the UI and e2e work without a network call.
+ * Summarize a feed into conversations. In demo mode — or when the chosen
+ * provider isn't configured (no Anthropic key) — returns a deterministic offline
+ * digest so the UI and e2e work without a network call.
  */
 export async function summarizeFeed(items: FeedItem[], opts: SummarizeOpts): Promise<Digest> {
-  if (isDemo() || !opts.apiKey) return demoDigest(items)
+  if (isDemo()) return demoDigest(items)
+  const content = userContent(items, opts.previous)
+  if (opts.provider === 'ollama') return summarizeOllama(items, content, opts)
+  if (!opts.apiKey) return demoDigest(items)
+  return summarizeAnthropic(items, content, opts)
+}
 
-  // For label stability only the id+label of continuing conversations matter;
-  // the old post references are stale against the new indices, so don't send them.
-  const prevJson = opts.previous
-    ? `\n\nPrevious conversations (reuse id+label if the topic continues):\n${JSON.stringify(
-        opts.previous.conversations.map((c) => ({ id: c.id, label: c.label })),
-      )}`
-    : ''
-  const body = {
-    model: opts.model,
-    max_tokens: 2048,
-    system: SYSTEM,
-    messages: [{ role: 'user', content: `Posts:\n${promptLines(items)}${prevJson}` }],
-  }
-
+async function summarizeAnthropic(items: FeedItem[], content: string, opts: SummarizeOpts): Promise<Digest> {
   const res = await fetch(ENDPOINT, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-api-key': opts.apiKey,
+      'x-api-key': opts.apiKey as string,
       'anthropic-version': '2023-06-01',
       // Required for browser-origin calls. Named "dangerous" because the key
       // rides in the page — see PLAN §6 Phase E on the XSS exposure.
       'anthropic-dangerous-direct-browser-access': 'true',
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      model: opts.model,
+      max_tokens: 2048,
+      system: SYSTEM,
+      messages: [{ role: 'user', content }],
+    }),
   })
   if (!res.ok) {
     const detail = await res.text().catch(() => '')
@@ -161,6 +214,43 @@ export async function summarizeFeed(items: FeedItem[], opts: SummarizeOpts): Pro
   const data = (await res.json()) as { content?: { type: string; text?: string }[] }
   const text = (data.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('')
   return coerceDigest(extractJson(text), items)
+}
+
+async function summarizeOllama(items: FeedItem[], content: string, opts: SummarizeOpts): Promise<Digest> {
+  const base = (opts.ollamaUrl || DEFAULT_OLLAMA_URL).replace(/\/$/, '')
+  let res: Response
+  try {
+    res = await fetch(`${base}/api/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: opts.model,
+        stream: false,
+        // Constrain output to the schema — the local model can't return
+        // unparseable JSON — and lift the default 2048 context so a full feed
+        // isn't silently truncated.
+        format: DIGEST_SCHEMA,
+        options: { temperature: 0.2, num_ctx: 8192 },
+        messages: [
+          { role: 'system', content: SYSTEM },
+          { role: 'user', content },
+        ],
+      }),
+    })
+  } catch {
+    // A browser-level failure here is nearly always the environment, not the
+    // request: Ollama not running, CORS origin not allowed, or an https page
+    // blocked from reaching http://localhost (mixed content).
+    throw new Error(
+      `Could not reach Ollama at ${base}. Is it running with OLLAMA_ORIGINS set for this origin? (A deployed https page can't call http://localhost.)`,
+    )
+  }
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    throw new Error(`Ollama ${res.status}: ${detail.slice(0, 200) || res.statusText}`)
+  }
+  const data = (await res.json()) as { message?: { content?: string } }
+  return coerceDigest(extractJson(data.message?.content ?? ''), items)
 }
 
 /** Exemplar posts for a conversation, loudest-by-velocity first. */

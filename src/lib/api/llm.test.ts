@@ -29,7 +29,7 @@ describe('summarizeFeed', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const digest = await summarizeFeed([a, b], { apiKey: 'sk-ant-test', model: 'm' })
+    const digest = await summarizeFeed([a, b], { provider: 'anthropic', apiKey: 'sk-ant-test', model: 'm' })
     expect(digest.conversations).toHaveLength(1)
     expect(digest.conversations[0].postUris).toEqual(['at://real/1', 'at://real/2'])
   })
@@ -46,7 +46,7 @@ describe('summarizeFeed', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const digest = await summarizeFeed([a], { apiKey: 'sk-ant-test', model: 'm' })
+    const digest = await summarizeFeed([a], { provider: 'anthropic', apiKey: 'sk-ant-test', model: 'm' })
     expect(digest.conversations.map((c) => c.id)).toEqual(['real'])
   })
 
@@ -60,7 +60,7 @@ describe('summarizeFeed', () => {
         }),
       ),
     )
-    const digest = await summarizeFeed([a], { apiKey: 'sk-ant-test', model: 'm' })
+    const digest = await summarizeFeed([a], { provider: 'anthropic', apiKey: 'sk-ant-test', model: 'm' })
     expect(digest.conversations[0].status).toBe('steady')
   })
 
@@ -76,7 +76,7 @@ describe('summarizeFeed', () => {
         text: async () => '',
       } as Response),
     )
-    await expect(summarizeFeed([a], { apiKey: 'sk-ant-test', model: 'm' })).rejects.toThrow(/cut off/)
+    await expect(summarizeFeed([a], { provider: 'anthropic', apiKey: 'sk-ant-test', model: 'm' })).rejects.toThrow(/cut off/)
   })
 
   it('throws with the API status on a non-ok response', async () => {
@@ -90,16 +90,52 @@ describe('summarizeFeed', () => {
         text: async () => 'bad key',
       } as Response),
     )
-    await expect(summarizeFeed([a], { apiKey: 'bad', model: 'm' })).rejects.toThrow(/401/)
+    await expect(summarizeFeed([a], { provider: 'anthropic', apiKey: 'bad', model: 'm' })).rejects.toThrow(/401/)
   })
 
   it('returns a demo digest (no network) when no key is given', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
     const posts = [mkPost({ text: 'a map of the graph layout' }), mkPost({ text: 'dismissing a thread' })]
-    const digest = await summarizeFeed(posts, { apiKey: '', model: 'm' })
+    const digest = await summarizeFeed(posts, { provider: 'anthropic', apiKey: '', model: 'm' })
     expect(fetchMock).not.toHaveBeenCalled()
     expect(digest.conversations.length).toBeGreaterThan(0)
+  })
+
+  it('calls the Ollama endpoint and maps its schema-constrained JSON', async () => {
+    const a = mkPost({ uri: 'at://real/1', text: 'one' })
+    const b = mkPost({ uri: 'at://real/2', text: 'two' })
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({
+        message: {
+          content: JSON.stringify({
+            conversations: [{ id: 'c', label: 'L', summary: 's', status: 'steady', postIds: [0, 1] }],
+          }),
+        },
+      }),
+      text: async () => '',
+    } as Response)
+    vi.stubGlobal('fetch', fetchMock)
+
+    const digest = await summarizeFeed([a, b], {
+      provider: 'ollama',
+      model: 'llama3.1:8b',
+      ollamaUrl: 'http://localhost:11434/',
+    })
+    // Hits Ollama's chat endpoint (trailing slash normalized), not Anthropic.
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:11434/api/chat', expect.anything())
+    expect(digest.conversations[0].postUris).toEqual(['at://real/1', 'at://real/2'])
+  })
+
+  it('surfaces a friendly error when Ollama is unreachable', async () => {
+    const a = mkPost({ uri: 'at://real/1' })
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+    await expect(
+      summarizeFeed([a], { provider: 'ollama', model: 'llama3.1:8b', ollamaUrl: 'http://localhost:11434' }),
+    ).rejects.toThrow(/Could not reach Ollama/)
   })
 })
 
