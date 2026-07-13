@@ -56,6 +56,12 @@
       </button>
     </div>
 
+    <div class="row window">
+      <span>Posts</span>
+      <input type="range" min="20" max="120" step="10" bind:value={digest.window} />
+      <span class="wval">{digest.window}</span>
+    </div>
+
     {#if digest.provider === 'anthropic'}
       <label class="field">
         <span>Anthropic key</span>
@@ -77,8 +83,8 @@
         </button>
       </div>
       <p class="note">
-        Sends the {items.length} posts in view to Anthropic. The key stays in this tab's memory only
-        (re-enter next session); without one, a demo digest is shown.
+        Sends up to {digest.window} posts to Anthropic (fetches more if needed). The key stays in
+        this tab's memory only (re-enter next session); without one, a demo digest is shown.
       </p>
     {:else}
       <label class="field">
@@ -100,10 +106,11 @@
         </button>
       </div>
       <p class="note">
-        Runs locally — nothing leaves your machine. Start Ollama with the app's origin allowed
-        (<code>OLLAMA_ORIGINS={originHint} ollama serve</code>) and pull the model first
-        (<code>ollama pull {digest.ollamaModel || 'llama3.1:8b'}</code>). Only works when Skynets is
-        served over http://localhost — a deployed https page can't reach local Ollama.
+        Runs locally on up to {digest.window} posts — nothing leaves your machine. Start Ollama with
+        the app's origin allowed (<code>OLLAMA_ORIGINS={originHint} ollama serve</code>) and pull the
+        model first (<code>ollama pull {digest.ollamaModel || 'qwen3.5:4b-mlx'}</code>). Only works
+        when Skynets is served over http://localhost — a deployed https page can't reach local Ollama.
+        Bigger windows read more of the feed but wait longer before the first token.
       </p>
     {/if}
   </div>
@@ -215,6 +222,22 @@
   .row select {
     flex: 1 1 0;
     min-width: 0;
+  }
+  .window span:first-child {
+    color: var(--text-dim);
+    font-size: 0.72rem;
+    min-width: 3em;
+  }
+  .window input[type='range'] {
+    flex: 1 1 0;
+    min-width: 0;
+    accent-color: var(--accent);
+  }
+  .wval {
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    min-width: 2em;
+    text-align: right;
   }
   .seg {
     display: flex;

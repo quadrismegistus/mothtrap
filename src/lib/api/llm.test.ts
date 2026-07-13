@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { summarizeFeed, exemplars, type Conversation } from './llm'
+import { summarizeFeed, exemplars, contextFor, type Conversation } from './llm'
 import { mkPost } from '../testing'
 
 function apiResponse(payload: unknown) {
@@ -140,6 +140,25 @@ describe('summarizeFeed', () => {
     await expect(
       summarizeFeed([a], { provider: 'ollama', model: 'llama3.1:8b', ollamaUrl: 'http://localhost:11434' }),
     ).rejects.toThrow(/Could not reach Ollama/)
+  })
+})
+
+describe('contextFor', () => {
+  it('floors at 8192 for a small prompt', () => {
+    expect(contextFor('sys', 'a few short posts')).toBe(8192)
+  })
+
+  it('grows past the floor and caps at 32768 for a large feed', () => {
+    const huge = 'x'.repeat(200_000) // ~50k tokens of posts
+    expect(contextFor('sys', huge)).toBe(32768)
+  })
+
+  it('rounds a mid-size prompt up to a 4k step above the estimate', () => {
+    const mid = 'y'.repeat(40_000) // ~10k prompt tokens + headroom
+    const ctx = contextFor('sys', mid)
+    expect(ctx).toBeGreaterThan(8192)
+    expect(ctx % 4096).toBe(0)
+    expect(ctx).toBeGreaterThanOrEqual(10_000 + 1536)
   })
 })
 

@@ -38,19 +38,20 @@ export const MODELS: { id: string; label: string }[] = [
   { id: 'claude-opus-4-8', label: 'Opus 4.8' },
 ]
 
-/** Default local model + endpoint. llama3.1:8b (~5GB Q4) fits a 16GB machine
- * and follows the JSON instruction reliably; swap in the panel for others. */
-export const DEFAULT_OLLAMA_MODEL = 'llama3.1:8b'
+/** Default local model + endpoint. qwen3.5:4b-mlx benchmarked best for this
+ * task on Apple Silicon — ~31 tok/s, and it resolved real subtweets (an ICE
+ * killing discussed without naming ICE) that a fixture wouldn't reveal; the 9b
+ * was ~2.3× slower for no clear quality gain. */
+export const DEFAULT_OLLAMA_MODEL = 'qwen3.5:4b-mlx'
 export const DEFAULT_OLLAMA_URL = 'http://localhost:11434'
 
 /** Suggested local models, ordered by appetite, for the panel's datalist. */
 export const OLLAMA_MODELS: { id: string; label: string }[] = [
-  { id: 'llama3.1:8b', label: 'llama3.1:8b — ~5GB, needs 16GB RAM' },
+  { id: 'qwen3.5:4b-mlx', label: 'qwen3.5:4b-mlx — ~4GB, fast, best tested pick' },
+  { id: 'qwen3.5:9b-mlx', label: 'qwen3.5:9b-mlx — ~9GB, richer but ~2× slower' },
+  { id: 'llama3.1:8b', label: 'llama3.1:8b — ~5GB, GGUF, needs 16GB RAM' },
   { id: 'qwen2.5:7b', label: 'qwen2.5:7b — ~5GB, strong at JSON' },
-  { id: 'qwen3:8b', label: 'qwen3:8b — ~5GB, resolves subtweets well' },
-  { id: 'qwen3:4b', label: 'qwen3:4b — ~3GB, for 8GB RAM' },
   { id: 'gemma3:4b', label: 'gemma3:4b — ~3GB, for 8GB RAM' },
-  { id: 'gemma3:12b', label: 'gemma3:12b — ~8GB, needs a GPU/32GB' },
 ]
 
 const ENDPOINT = 'https://api.anthropic.com/v1/messages'
@@ -81,6 +82,17 @@ const DIGEST_SCHEMA = {
 function postText(item: FeedItem): string {
   const rec = item.post.record
   return AppBskyFeedPost.isRecord(rec) ? rec.text : ''
+}
+
+/** Choose an Ollama context window that fits the whole prompt plus room for the
+ * JSON answer. Estimate ~4 chars/token, add output headroom, round to a 4k step,
+ * and clamp — small enough not to waste memory on a short feed, large enough
+ * that a 100-post feed isn't truncated from the left. */
+export function contextFor(system: string, content: string): number {
+  const promptTokens = Math.ceil((system.length + content.length) / 4)
+  const needed = promptTokens + 1536 // output + schema + slack
+  const stepped = Math.ceil(needed / 4096) * 4096
+  return Math.min(32768, Math.max(8192, stepped))
 }
 
 /** Compact per-post line for the prompt — a short integer index, author,
@@ -242,14 +254,16 @@ async function summarizeOllama(
         model: opts.model,
         stream,
         // Constrain output to the schema — the local model can't return
-        // unparseable JSON — and lift the default 2048 context so a full feed
-        // isn't silently truncated.
+        // unparseable JSON.
         format: DIGEST_SCHEMA,
         // Disable extended reasoning: on a thinking model (qwen3, deepseek-r1)
         // the reasoning trace turns a ~15s clustering call into minutes for no
         // quality gain on this task; non-thinking models ignore the flag.
         think: false,
-        options: { temperature: 0.2, num_ctx: 8192 },
+        // Size the context to the actual prompt (Ollama's 2048 default, and even
+        // a fixed 8192, silently truncate a large feed from the left — dropping
+        // the oldest posts). Scale to the estimate + output headroom, clamped.
+        options: { temperature: 0.2, num_ctx: contextFor(SYSTEM, content) },
         messages: [
           { role: 'system', content: SYSTEM },
           { role: 'user', content },

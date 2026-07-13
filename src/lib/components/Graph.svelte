@@ -198,9 +198,17 @@
       .filter((a): a is NonNullable<typeof a> => a !== null)
   })
 
-  function summarize() {
+  async function summarize() {
     showDigest = true
-    digest.summarize(feedItems)
+    // Pull more pages until we have enough posts to fill the digest window (or
+    // the timeline runs out). More posts = richer conversations — the "ICE
+    // killing" thread only cohered past ~30 posts — so the digest shouldn't be
+    // starved by whatever the node limit happened to load.
+    let guard = 0
+    while (feedItems.length < digest.window && cursor && !loading && guard++ < 12) {
+      await load(true)
+    }
+    digest.summarize(feedItems.slice(0, digest.window))
   }
 
   // Click a conversation's exemplar in the panel → pin it and pop its card, so

@@ -15,7 +15,13 @@ interface Persisted {
   model: string
   ollamaModel: string
   ollamaUrl: string
+  window: number
 }
+
+/** How many posts to send to the digest. ~70 was the sweet spot in testing:
+ * enough for conversations to coalesce (the real "ICE killing" thread only
+ * emerged past ~30 posts) without the prefill wait a 100-post prompt incurs. */
+export const DEFAULT_WINDOW = 70
 
 function load(): Partial<Persisted> {
   if (typeof localStorage === 'undefined') return {}
@@ -39,6 +45,7 @@ class DigestState {
   model = $state(DEFAULT_MODEL)
   ollamaModel = $state(DEFAULT_OLLAMA_MODEL)
   ollamaUrl = $state(DEFAULT_OLLAMA_URL)
+  window = $state(DEFAULT_WINDOW)
   digest = $state<Digest | undefined>(undefined)
   loading = $state(false)
   error = $state<string | undefined>(undefined)
@@ -53,6 +60,7 @@ class DigestState {
     if (typeof p.model === 'string') this.model = p.model
     if (typeof p.ollamaModel === 'string') this.ollamaModel = p.ollamaModel
     if (typeof p.ollamaUrl === 'string') this.ollamaUrl = p.ollamaUrl
+    if (typeof p.window === 'number' && p.window > 0) this.window = p.window
 
     if (typeof localStorage !== 'undefined') {
       $effect.root(() => {
@@ -62,6 +70,7 @@ class DigestState {
             model: this.model,
             ollamaModel: this.ollamaModel,
             ollamaUrl: this.ollamaUrl,
+            window: this.window,
           }
           localStorage.setItem(KEY, JSON.stringify(data))
         })
