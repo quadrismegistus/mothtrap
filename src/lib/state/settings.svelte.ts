@@ -9,6 +9,7 @@ interface Persisted {
   cycleInterval: number
   livePoll: boolean
   connectReplies: boolean
+  replyChains: boolean
   clusterForce: boolean
   showReposts: boolean
   followsOnly: boolean
@@ -36,6 +37,7 @@ class Settings {
   cycleInterval = $state(4)
   livePoll = $state(true)
   connectReplies = $state(true)
+  replyChains = $state(false)
   clusterForce = $state(false)
   showReposts = $state(true)
   followsOnly = $state(false)
@@ -51,6 +53,7 @@ class Settings {
     if (typeof p.cycleInterval === 'number') this.cycleInterval = p.cycleInterval
     if (typeof p.livePoll === 'boolean') this.livePoll = p.livePoll
     if (typeof p.connectReplies === 'boolean') this.connectReplies = p.connectReplies
+    if (typeof p.replyChains === 'boolean') this.replyChains = p.replyChains
     if (typeof p.clusterForce === 'boolean') this.clusterForce = p.clusterForce
     if (typeof p.showReposts === 'boolean') this.showReposts = p.showReposts
     if (typeof p.followsOnly === 'boolean') this.followsOnly = p.followsOnly
@@ -66,6 +69,7 @@ class Settings {
             cycleInterval: this.cycleInterval,
             livePoll: this.livePoll,
             connectReplies: this.connectReplies,
+            replyChains: this.replyChains,
             clusterForce: this.clusterForce,
             showReposts: this.showReposts,
             followsOnly: this.followsOnly,

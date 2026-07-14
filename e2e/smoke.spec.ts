@@ -204,6 +204,17 @@ test('dragging moves a node without pinning; a click pins it', async ({ page }) 
   await expect(node).toHaveClass(/pinned/)
 })
 
+test('Reply chains expands a collapsed thread into a connected chain', async ({ page }) => {
+  await graphReady(page)
+  const edgesBefore = await page.locator('.edges line').count()
+  await page.locator('.gear').click()
+  await page.locator('.config .row', { hasText: 'Reply chains' }).locator('input').check()
+  await page.mouse.click(650, 400) // close config
+  await page.waitForTimeout(1200)
+  // The 5-post demo thread stops collapsing and draws its chain → more edges.
+  expect(await page.locator('.edges line').count()).toBeGreaterThan(edgesBefore)
+})
+
 test('config popover closes on a click outside it', async ({ page }) => {
   await graphReady(page)
   await page.locator('.gear').click()

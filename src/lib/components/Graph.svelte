@@ -109,7 +109,17 @@
   const contextByUri = $derived(new Map(allItems.map((i) => [i.post.uri, i])))
   const primaryUris = $derived(new Set(primarySources.map((i) => i.post.uri)))
   const visible = $derived(allItems.filter((i) => !read.isDismissed(i.post.uri)))
-  const graph = $derived(buildGraph(visible, expanded, primaryUris))
+  // "Reply chains" on: treat every timeline reply's thread as expanded so its
+  // parent chain shows as connected nodes instead of collapsing (a 3+ post
+  // chain, or a parent with siblings, would otherwise collapse to one node and
+  // hide the ancestry).
+  const expandedForBuild = $derived.by(() => {
+    if (!settings.replyChains) return expanded
+    const s = new Set<string>(expanded)
+    for (const it of feedItems) if (parentUriOf(it)) s.add(it.post.uri)
+    return s
+  })
+  const graph = $derived(buildGraph(visible, expandedForBuild, primaryUris))
 
   // Only primary nodes compete for the window, so the queue/turnover counts
   // are over them; context nodes ride along and don't inflate the numbers.
@@ -126,10 +136,11 @@
       settings.nodeLimit,
       turnoverOffset,
     )
-    if (!pinned.size && !settings.connectReplies) return selected
+    const connect = settings.connectReplies || settings.replyChains
+    if (!pinned.size && !connect) return selected
     const set = new Map(selected.map((n) => [n.uri, n]))
     for (const n of graph.nodes) if (pinned.has(n.uri) && !set.has(n.uri)) set.set(n.uri, n)
-    if (settings.connectReplies) {
+    if (connect) {
       const byUri = new Map(graph.nodes.map((n) => [n.uri, n]))
       for (const start of [...set.values()]) {
         let cur: GraphNode | undefined = start
@@ -449,7 +460,7 @@
   // (skipping dismissed ones). As fetched parents reveal their own parents, this
   // climbs the chain toward the thread root over successive runs.
   $effect(() => {
-    if (!settings.connectReplies) return
+    if (!settings.connectReplies && !settings.replyChains) return
     const present = new Set(allItems.map((i) => i.post.uri))
     const wanted = new Set<string>()
     for (const it of allItems) {
@@ -841,6 +852,13 @@
           <span class="val"></span>
         </div>
         <p class="hint">Bring in the posts replies are replying to, drawing edges.</p>
+
+        <div class="row">
+          <span class="label">Reply chains</span>
+          <input type="checkbox" bind:checked={settings.replyChains} />
+          <span class="val"></span>
+        </div>
+        <p class="hint">Show each reply's full parent chain to the thread root (won't collapse those threads).</p>
 
         <div class="row">
           <span class="label">Cluster</span>
