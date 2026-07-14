@@ -104,6 +104,9 @@
   let revived = $state<FeedItem[]>([])
   const primarySources = $derived([...compose.injected, ...feedItems])
   const allItems = $derived([...primarySources, ...threads.posts, ...ancestors.posts, ...revived])
+  // Every loaded post by uri — lets the digest resolve a reply's parent text to
+  // feed the classifier (a bare reply is unclassifiable without it).
+  const contextByUri = $derived(new Map(allItems.map((i) => [i.post.uri, i])))
   const primaryUris = $derived(new Set(primarySources.map((i) => i.post.uri)))
   const visible = $derived(allItems.filter((i) => !read.isDismissed(i.post.uri)))
   const graph = $derived(buildGraph(visible, expanded, primaryUris))
@@ -266,7 +269,7 @@
     while (feedItems.length < digest.window && cursor && !loading && guard++ < 12) {
       await load(true)
     }
-    digest.summarize(feedItems.slice(0, digest.window))
+    digest.summarize(feedItems.slice(0, digest.window), contextByUri)
   }
 
   // Click a conversation's exemplar in the panel → pin it and pop its card, so
@@ -524,7 +527,7 @@
         await load(true)
       }
     }
-    await digest.summarize(feedItems.slice(0, digest.window))
+    await digest.summarize(feedItems.slice(0, digest.window), contextByUri)
   }
   $effect(() => {
     if (!digest.continuous) return

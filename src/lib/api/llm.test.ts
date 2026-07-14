@@ -200,6 +200,23 @@ describe('summarizeFeed', () => {
     expect(d.conversations).toHaveLength(1)
   })
 
+  it('inlines a reply parent text into the prompt (classifier context)', async () => {
+    const parent = mkPost({ uri: 'at://p/parent', author: 'alice.test', text: 'the original claim' })
+    const reply = mkPost({ uri: 'at://p/reply', text: 'exactly this', parent: 'at://p/parent', root: 'at://p/parent' })
+    const fetchMock = vi.fn().mockResolvedValue(ollamaResp('{"clusters":[]}'))
+    vi.stubGlobal('fetch', fetchMock)
+    await summarizeFeed([reply], {
+      provider: 'ollama',
+      model: 'm',
+      ollamaUrl: 'http://x',
+      postByUri: new Map([['at://p/parent', parent]]),
+    })
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    const userMsg = body.messages.find((m: { role: string }) => m.role === 'user').content
+    expect(userMsg).toContain('re @alice.test')
+    expect(userMsg).toContain('the original claim') // parent text is present
+  })
+
   it('surfaces a friendly error when Ollama is unreachable', async () => {
     const a = mkPost({ uri: 'at://real/1' })
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))

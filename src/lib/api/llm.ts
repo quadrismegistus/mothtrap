@@ -96,22 +96,33 @@ export function contextFor(system: string, content: string): number {
   return Math.min(32768, Math.max(8192, stepped))
 }
 
-/** Compact per-post line for the prompt — a short integer index, author,
- * counts, text. Posts are referenced back by index (not their long at-uri) so
- * the model's answer stays tiny and can't truncate mid-uri; kept terse so 100
- * posts stay ~10k tokens. */
-function promptLines(items: FeedItem[]): string {
+function parentUriOf(item: FeedItem): string | undefined {
+  const rec = item.post.record
+  return AppBskyFeedPost.isRecord(rec) && rec.reply ? rec.reply.parent.uri : undefined
+}
+
+/** Compact per-post line for the prompt — index, author, counts, text. When a
+ * post is a reply and its parent is resolvable (via `postByUri`), the parent's
+ * text is inlined as context, since a bare reply ("exactly this", "he should be
+ * scared") is unclassifiable without it — the whole point. Kept terse. */
+function promptLines(items: FeedItem[], postByUri?: Map<string, FeedItem>): string {
   return items
     .map((i, n) => {
       const p = i.post
       const handle = p.author.handle
-      const t = postText(i).replace(/\s+/g, ' ').slice(0, 280)
+      let t = postText(i).replace(/\s+/g, ' ').slice(0, 280)
+      const pu = parentUriOf(i)
+      const parent = pu && postByUri ? postByUri.get(pu) : undefined
+      if (parent) {
+        const pt = postText(parent).replace(/\s+/g, ' ').slice(0, 160)
+        t = `[re @${parent.post.author.handle}: "${pt}"] ${t}`
+      }
       return `[${n}]\t@${handle}\t♥${p.likeCount ?? 0} ↻${p.repostCount ?? 0} ↺${p.replyCount ?? 0}\t${t}`
     })
     .join('\n')
 }
 
-const CLUSTERING_GUIDANCE = `Group them into the handful of distinct CONVERSATIONS actually in play — the discourse-events a person would name if asked "what's the feed about today" (e.g. "a public figure died", "an argument about how people reacted to it", "a tooling release"). A conversation may span replies AND standalone posts that share a subject even without shared vocabulary — resolve subtweets and vague reactions to what they are actually about. Not every post joins one; ignore true one-offs rather than forcing them.
+const CLUSTERING_GUIDANCE = `Group them into the handful of distinct CONVERSATIONS actually in play — the discourse-events a person would name if asked "what's the feed about today" (e.g. "a public figure died", "an argument about how people reacted to it", "a tooling release"). A conversation may span replies AND standalone posts that share a subject even without shared vocabulary — resolve subtweets and vague reactions to what they are actually about. A post prefixed with [re @handle: "..."] is a REPLY — the quoted text is the post it replies to; use it to place the reply correctly. Not every post joins one; ignore true one-offs rather than forcing them.
 
 Rules:
 - 2–6 conversations. Order them most-active first.
@@ -261,17 +272,19 @@ export interface SummarizeOpts {
   apiKey?: string
   /** Ollama only. */
   ollamaUrl?: string
+  /** Resolves reply parents so their text can be inlined as context. */
+  postByUri?: Map<string, FeedItem>
 }
 
 /** The user-turn content: the numbered feed plus, optionally, the prior
  * conversation labels (id+label only — the old post indices are stale). */
-function userContent(items: FeedItem[], previous?: Digest): string {
+function userContent(items: FeedItem[], previous?: Digest, postByUri?: Map<string, FeedItem>): string {
   const prevJson = previous
     ? `\n\nPrevious conversations (reuse id+label if the topic continues):\n${JSON.stringify(
         previous.conversations.map((c) => ({ id: c.id, label: c.label })),
       )}`
     : ''
-  return `Posts:\n${promptLines(items)}${prevJson}`
+  return `Posts:\n${promptLines(items, postByUri)}${prevJson}`
 }
 
 /** Called with the accumulated raw model text as it streams in (Ollama path). */
@@ -289,7 +302,7 @@ export async function summarizeFeed(
   onProgress?: OnProgress,
 ): Promise<Digest> {
   if (isDemo()) return demoDigest(items)
-  const content = userContent(items, opts.previous)
+  const content = userContent(items, opts.previous, opts.postByUri)
   if (opts.provider === 'ollama') return summarizeOllama(items, content, opts, onProgress)
   if (!opts.apiKey) return demoDigest(items)
   return summarizeAnthropic(items, content, opts)
@@ -446,9 +459,13 @@ const ROLL_SYSTEM = `You maintain a running digest of a Bluesky feed. You are gi
 Return ONLY this JSON object, no prose:
 {"results":[{"label":"Short Title","isNew":true,"postIds":[0,3]}]}`
 
-function rollContent(newItems: FeedItem[], existing: { label: string; summary?: string }[]): string {
+function rollContent(
+  newItems: FeedItem[],
+  existing: { label: string; summary?: string }[],
+  postByUri?: Map<string, FeedItem>,
+): string {
   const ex = existing.map((c) => `"${c.label}"${c.summary ? ` — ${c.summary}` : ''}`).join('\n')
-  return `EXISTING CONVERSATIONS:\n${ex || '(none yet)'}\n\nNEW POSTS:\n${promptLines(newItems)}`
+  return `EXISTING CONVERSATIONS:\n${ex || '(none yet)'}\n\nNEW POSTS:\n${promptLines(newItems, postByUri)}`
 }
 
 function coerceRoll(raw: unknown, newItems: FeedItem[]): RollUpdate[] {
@@ -484,7 +501,7 @@ export async function rollFeed(
 ): Promise<RollUpdate[]> {
   if (newItems.length === 0) return []
   if (isDemo()) return demoRoll(newItems)
-  const content = rollContent(newItems, existing)
+  const content = rollContent(newItems, existing, opts.postByUri)
   if (opts.provider === 'ollama') {
     return coerceRoll(await ollamaRaw(ROLL_SYSTEM, content, ROLL_SCHEMA, opts, onProgress), newItems)
   }

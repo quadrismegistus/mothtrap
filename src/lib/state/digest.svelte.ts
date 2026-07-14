@@ -88,17 +88,19 @@ class DigestState {
     }
   }
 
-  #opts(previous?: Digest): SummarizeOpts {
+  #opts(previous?: Digest, postByUri?: Map<string, FeedItem>): SummarizeOpts {
     return {
       provider: this.provider,
       model: this.provider === 'ollama' ? this.ollamaModel : this.model,
       apiKey: this.apiKey,
       ollamaUrl: this.ollamaUrl,
       previous,
+      postByUri,
     }
   }
 
-  async summarize(items: FeedItem[]) {
+  /** `contextByUri` resolves reply parents so their text is fed to the classifier. */
+  async summarize(items: FeedItem[], contextByUri?: Map<string, FeedItem>) {
     if (this.loading || items.length === 0) return
     this.loading = true
     this.error = undefined
@@ -107,11 +109,11 @@ class DigestState {
       if (this.continuous) {
         // Rolling engine: embed → gate → establish/roll/skip. It maintains its
         // own clusters across calls; we surface them as the digest.
-        await this.engine.ingest(items, this.#opts())
+        await this.engine.ingest(items, this.#opts(undefined, contextByUri))
         if (this.engine.error) this.error = this.engine.error
         this.digest = this.engine.toDigest()
       } else {
-        this.digest = await summarizeFeed(items, this.#opts(this.digest), (raw) => (this.streamText = raw))
+        this.digest = await summarizeFeed(items, this.#opts(this.digest, contextByUri), (raw) => (this.streamText = raw))
       }
       this.ranAt = Date.now()
     } catch (err) {
