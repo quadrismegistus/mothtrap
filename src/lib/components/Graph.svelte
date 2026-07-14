@@ -196,38 +196,59 @@
   // of its member nodes that are currently on the canvas. A conversation with no
   // visible members simply isn't drawn (it still lives in the panel). The same
   // color keys the panel swatch and this overlay so they read as one thing.
-  const annotations = $derived.by(() => {
+  // Exclusive conversation membership (each post belongs to the FIRST, i.e.
+  // most-active, conversation that claims it). Derived from the digest ALONE —
+  // NOT from live positions — so it's stable across sim ticks. The sim inputs
+  // below build on this; the render (annotations/topics) reads live positions.
+  const topicMembership = $derived.by(() => {
     const convos = digest.digest?.conversations ?? []
-    // Membership is exclusive: each post belongs to the FIRST conversation
-    // (most-active first) that claims it, so a post never links to two topics.
     const claimed = new Set<string>()
-    return convos
-      .map((c) => {
-        const own = c.postUris.filter((u) => !claimed.has(u))
-        own.forEach((u) => claimed.add(u))
-        const pts = own
+    return convos.map((c) => {
+      const uris = c.postUris.filter((u) => !claimed.has(u))
+      uris.forEach((u) => claimed.add(u))
+      return { id: c.id, sid: `topic:${c.id}`, label: c.label, color: convoColor(c.id), uris }
+    })
+  })
+
+  // Sim inputs use the members' STABLE target positions (not live ones), so the
+  // topic targets don't shift every tick — which would restart the sim forever.
+  const targetByUri = $derived(new Map(targets.map((t) => [t.id, t])))
+  const topicTargets = $derived.by<Target[]>(() =>
+    topicMembership
+      .map((m) => {
+        const pts = m.uris.map((u) => targetByUri.get(u)).filter((t): t is Target => t != null)
+        if (pts.length === 0) return null
+        return {
+          id: m.sid,
+          tx: pts.reduce((s, t) => s + t.tx, 0) / pts.length,
+          ty: pts.reduce((s, t) => s + t.ty, 0) / pts.length,
+          r: 52, // big collision radius — the topic pill is wide
+        }
+      })
+      .filter((t): t is Target => t !== null),
+  )
+  const topicLinks = $derived(
+    topicMembership.flatMap((m) =>
+      m.uris.filter((u) => targetByUri.has(u)).map((u) => ({ source: m.sid, target: u })),
+    ),
+  )
+
+  // Render: topic nodes + edges positioned from the LIVE sim positions. A
+  // conversation with no visible members simply isn't drawn.
+  const annotations = $derived.by(() =>
+    topicMembership
+      .map((m) => {
+        const pts = m.uris
           .map((u) => placedByUri.get(u))
           .filter((p): p is NonNullable<typeof p> => p != null)
         if (pts.length === 0) return null
         const cx = pts.reduce((s, p) => s + p.px, 0) / pts.length
         const cy = pts.reduce((s, p) => s + p.py, 0) / pts.length
-        // Each conversation is a topic node linked to its (visible) member posts.
         const members = pts.map((p) => ({ uri: p.node.uri, x: p.px, y: p.py }))
-        return { id: c.id, sid: `topic:${c.id}`, label: c.label, color: convoColor(c.id), cx, cy, uris: own, members }
+        return { id: m.id, sid: m.sid, label: m.label, color: m.color, cx, cy, uris: m.uris, members }
       })
-      .filter((a): a is NonNullable<typeof a> => a !== null)
-  })
-
-  // Topic nodes join the force simulation as real nodes: a target at the
-  // members' centroid, and a link to each member so the edges actually pull the
-  // conversation's posts together (and the topic node is draggable, like a post).
-  const topicTargets = $derived<Target[]>(
-    annotations.map((a) => ({ id: a.sid, tx: a.cx, ty: a.cy, r: 24 })),
+      .filter((a): a is NonNullable<typeof a> => a !== null),
   )
-  const topicLinks = $derived(
-    annotations.flatMap((a) => a.members.map((m) => ({ source: a.sid, target: m.uri }))),
-  )
-  // Topic render positions come from the sim (fallback: the members' centroid).
   const topics = $derived(
     annotations.map((a) => {
       const p = positions.get(a.sid)
@@ -415,6 +436,9 @@
   $effect(() => {
     const t = [...targets, ...topicTargets]
     const links = [...visibleEdges.map((e) => ({ source: e.from, target: e.to })), ...topicLinks]
+    // Clamp nodes inside the canvas so they can't drift up under the top bar (the
+    // graph starts below it, but the sim could otherwise push a node to the edge).
+    layout?.setBounds(w, h, 18, 24)
     layout?.update(t, links, new Set(pinned), settings.clusterForce)
   })
 
@@ -906,9 +930,9 @@
     pointer-events: none;
   }
   .annotations line {
-    stroke-width: 1.6;
-    opacity: 0.4;
-    stroke-dasharray: 2 4;
+    stroke-width: 2.4;
+    opacity: 0.7;
+    stroke-dasharray: 3 4;
   }
   /* Topic node: sits like a node at the centroid of its conversation, edges
      radiating to member posts. Clickable to reveal the whole conversation. */
@@ -939,8 +963,8 @@
   }
   .edges line {
     stroke: var(--text-dim);
-    stroke-width: 1.6;
-    opacity: 0.65;
+    stroke-width: 2.4;
+    opacity: 0.8;
   }
   .edges marker path {
     fill: var(--text-dim);

@@ -43,6 +43,9 @@ export class ForceLayout {
   readonly sim: Simulation<SimNode, SimLink>
   #nodes: SimNode[] = []
   #byId = new Map<string, SimNode>()
+  // Canvas bounds — nodes are clamped fully inside so they can't drift up behind
+  // the top bar (or off any edge). Set via setBounds; 0 = unbounded.
+  #bounds = { w: 0, h: 0, top: 0, bottom: 0 }
 
   constructor(onTick: () => void) {
     this.sim = forceSimulation<SimNode, SimLink>([])
@@ -51,8 +54,26 @@ export class ForceLayout {
       .force('x', forceX<SimNode>((d) => d.tx).strength(0.08))
       .force('y', forceY<SimNode>((d) => d.ty).strength(0.08))
       .force('collide', forceCollide<SimNode>((d) => d.r + 9).strength(0.9))
-      .on('tick', onTick)
+      .on('tick', () => {
+        this.#clamp()
+        onTick()
+      })
     this.sim.stop()
+  }
+
+  /** Keep every node fully within the canvas (below `top`, above `bottom`, and
+   * inside the left/right edges), respecting its radius. */
+  setBounds(w: number, h: number, top: number, bottom: number) {
+    this.#bounds = { w, h, top, bottom }
+  }
+  #clamp() {
+    const { w, h, top, bottom } = this.#bounds
+    if (!w || !h) return
+    for (const n of this.#nodes) {
+      const r = n.r
+      if (n.x != null) n.x = Math.max(r + 2, Math.min(w - r - 2, n.x))
+      if (n.y != null) n.y = Math.max(top + r, Math.min(h - bottom - r, n.y))
+    }
   }
 
   /**
