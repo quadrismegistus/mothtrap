@@ -204,6 +204,14 @@ test('dragging moves a node without pinning; a click pins it', async ({ page }) 
   await expect(node).toHaveClass(/pinned/)
 })
 
+test('config popover closes on a click outside it', async ({ page }) => {
+  await graphReady(page)
+  await page.locator('.gear').click()
+  await expect(page.locator('.config')).toBeVisible()
+  await page.mouse.click(700, 400) // empty canvas
+  await expect(page.locator('.config')).toHaveCount(0)
+})
+
 test('cluster mode hides the semantic axes', async ({ page }) => {
   await graphReady(page)
   await page.locator('.gear').click()

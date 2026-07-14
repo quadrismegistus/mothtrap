@@ -644,6 +644,8 @@
     // A click on empty canvas (not a node, card, panel, or control) collapses
     // any open/pinned posts. Node/card handlers live on their own elements.
     const t = e.target as HTMLElement
+    // Click outside the config popover closes it (the gear's own click toggles).
+    if (showConfig && !t.closest('.config-wrap')) showConfig = false
     if (!t.closest('.wrap, .card, .config-wrap, .hud, .panel, .digest-btn, .topic-node')) clearAll()
   }}
 >
@@ -1002,7 +1004,10 @@
     position: absolute;
     left: 0;
     bottom: calc(100% + 8px);
-    width: 260px;
+    width: 500px;
+    max-width: 92vw;
+    max-height: calc(100vh - 120px);
+    overflow-y: auto;
     padding: 0.9rem;
     background: var(--bg-elev);
     border: 1px solid var(--border);
@@ -1012,7 +1017,6 @@
     flex-direction: column;
     gap: 0.35rem;
     font-size: 0.8rem;
-    overflow: hidden;
   }
   .config .row {
     display: flex;
