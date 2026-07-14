@@ -193,13 +193,29 @@
         if (pts.length === 0) return null
         const cx = pts.reduce((s, p) => s + p.px, 0) / pts.length
         const cy = pts.reduce((s, p) => s + p.py, 0) / pts.length
-        // Each conversation is drawn as a topic node at the centroid of its
-        // (visible) member posts, with an edge to each member.
+        // Each conversation is a topic node linked to its (visible) member posts.
         const members = pts.map((p) => ({ uri: p.node.uri, x: p.px, y: p.py }))
-        return { id: c.id, label: c.label, color: convoColor(c.id), cx, cy, uris: c.postUris, members }
+        return { id: c.id, sid: `topic:${c.id}`, label: c.label, color: convoColor(c.id), cx, cy, uris: c.postUris, members }
       })
       .filter((a): a is NonNullable<typeof a> => a !== null)
   })
+
+  // Topic nodes join the force simulation as real nodes: a target at the
+  // members' centroid, and a link to each member so the edges actually pull the
+  // conversation's posts together (and the topic node is draggable, like a post).
+  const topicTargets = $derived<Target[]>(
+    annotations.map((a) => ({ id: a.sid, tx: a.cx, ty: a.cy, r: 24 })),
+  )
+  const topicLinks = $derived(
+    annotations.flatMap((a) => a.members.map((m) => ({ source: a.sid, target: m.uri }))),
+  )
+  // Topic render positions come from the sim (fallback: the members' centroid).
+  const topics = $derived(
+    annotations.map((a) => {
+      const p = positions.get(a.sid)
+      return { ...a, tx: p?.x ?? a.cx, ty: p?.y ?? a.cy }
+    }),
+  )
 
   async function summarize() {
     showDigest = true
@@ -230,17 +246,33 @@
     setHovered(uri)
   }
 
-  // Click a topic node → reveal its whole conversation: pin every member post
-  // (un-collapsing threads as needed) so all of them show on the graph at once.
-  function focusTopic(uris: string[]) {
-    if (focusedPin) {
-      pinned.delete(focusedPin)
-      focusedPin = null
+  // Topic nodes are draggable sim nodes (dragging pulls their member posts via
+  // the links). A plain click pins the topic where it is (like a post); it does
+  // NOT open every member's card. Threshold + window listeners mirror PostNode.
+  function togglePinUri(id: string) {
+    if (pinned.has(id)) pinned.delete(id)
+    else pinned.add(id)
+  }
+  function onTopicPointerDown(e: PointerEvent, id: string) {
+    e.preventDefault()
+    const sx = e.clientX
+    const sy = e.clientY
+    let moved = false
+    const move = (ev: PointerEvent) => {
+      if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 4) return
+      moved = true
+      onNodeDrag(id, ev.clientX, ev.clientY)
     }
-    for (const u of uris) {
-      if (!nodeByUri.has(u)) expanded.add(u)
-      pinned.add(u)
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      if (moved) onNodeDragEnd(id)
+      else togglePinUri(id)
     }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
   }
 
   // Collapse everything: clear hover + all pins (used by a click on empty canvas).
@@ -311,8 +343,8 @@
   // Reheat whenever targets or links change (new data, resize, dismissal, turnover),
   // or when the pinned set changes (pinned nodes get fixed positions).
   $effect(() => {
-    const t = targets
-    const links = visibleEdges.map((e) => ({ source: e.from, target: e.to }))
+    const t = [...targets, ...topicTargets]
+    const links = [...visibleEdges.map((e) => ({ source: e.from, target: e.to })), ...topicLinks]
     layout?.update(t, links, new Set(pinned), settings.clusterForce)
   })
 
@@ -516,7 +548,7 @@
     // A click on empty canvas (not a node, card, panel, or control) collapses
     // any open/pinned posts. Node/card handlers live on their own elements.
     const t = e.target as HTMLElement
-    if (!t.closest('.wrap, .card, .config-wrap, .hud, .panel, .digest-btn')) clearAll()
+    if (!t.closest('.wrap, .card, .config-wrap, .hud, .panel, .digest-btn, .topic-node')) clearAll()
   }}
 >
   {#if !settings.clusterForce}
@@ -552,9 +584,9 @@
 
   <!-- Topic edges: each conversation's node links to its member posts. -->
   <svg class="annotations" width={w} height={h}>
-    {#each annotations as a (a.id)}
+    {#each topics as a (a.id)}
       {#each a.members as m}
-        <line x1={a.cx} y1={a.cy} x2={m.x} y2={m.y} stroke={a.color} />
+        <line x1={a.tx} y1={a.ty} x2={m.x} y2={m.y} stroke={a.color} />
       {/each}
     {/each}
   </svg>
@@ -579,12 +611,13 @@
     />
   {/each}
 
-  {#each annotations as a (a.id)}
+  {#each topics as a (a.id)}
     <button
       class="topic-node"
-      style="left: {a.cx}px; top: {a.cy}px; --c: {a.color}"
-      title="Show this conversation's posts"
-      onclick={() => focusTopic(a.uris)}
+      class:pinned={pinned.has(a.sid)}
+      style="left: {a.tx}px; top: {a.ty}px; --c: {a.color}"
+      title="Drag to pull its posts together · click to pin"
+      onpointerdown={(e) => onTopicPointerDown(e, a.sid)}
     >
       {a.label}
     </button>
@@ -772,13 +805,17 @@
     border: 2px solid var(--c);
     border-radius: 999px;
     text-align: center;
-    cursor: pointer;
+    cursor: grab;
+    touch-action: none;
     user-select: none;
     backdrop-filter: blur(3px);
     z-index: 3;
   }
   .topic-node:hover {
     background: color-mix(in srgb, var(--c) 22%, var(--bg-elev));
+  }
+  .topic-node.pinned {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 60%, transparent);
   }
   .edges line {
     stroke: var(--text-dim);
