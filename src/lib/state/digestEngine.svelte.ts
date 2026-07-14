@@ -100,9 +100,11 @@ export class DigestEngine {
   }
 
   #persist() {
-    void archive.putDigest(
-      this.clusters.map((c) => ({ id: c.id, label: c.label, summary: c.summary, status: c.status, uris: c.uris })),
-    )
+    // Snapshot out of $state — IndexedDB can't structured-clone a Svelte proxy.
+    const plain = $state.snapshot(this.clusters) as { id: string; label: string; summary: string; status: string; uris: string[] }[]
+    void archive
+      .putDigest(plain.map((c) => ({ id: c.id, label: c.label, summary: c.summary, status: c.status, uris: c.uris })))
+      .catch(() => {})
   }
 
   /** The digest as the panel/graph consume it. */
@@ -169,7 +171,10 @@ export class DigestEngine {
         if (vecs[k]) this.#vec.set(it.post.uri, vecs[k])
       })
       // Cache the fresh vectors so a reload doesn't re-embed the whole feed.
-      void archive.putVectors(fresh.map((it, k) => ({ uri: it.post.uri, vec: vecs[k] })).filter((e) => e.vec))
+      // `vec` is a plain array (from embedTexts); `uri` a string — both cloneable.
+      void archive
+        .putVectors(fresh.map((it, k) => ({ uri: it.post.uri, vec: vecs[k] })).filter((e) => e.vec))
+        .catch(() => {})
 
       const gate = noveltyGate(vecs, this.clusters.map((c) => c.centroid))
       this.lastGate = gate

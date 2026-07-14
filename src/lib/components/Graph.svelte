@@ -19,7 +19,7 @@
   import { follows } from '../state/follows.svelte'
   import { session } from '../state/session.svelte'
   import { archive } from '../state/archive'
-  import { backfill } from '../state/backfill'
+  import { backfill, type BackfillResult } from '../state/backfill'
   import { getFollowDids } from '../api/actors'
 
   // Captured at component init (before any archive write) so backfill can tell
@@ -51,6 +51,9 @@
   let turnoverOffset = $state(0)
   let showConfig = $state(false)
   let showDigest = $state(false)
+  let backfillStatus = $state<BackfillResult | undefined>(undefined)
+  let backfilling = $state(false)
+  let archiveStats = $state<{ posts: number; appearances: number; counts: number; follows: number } | undefined>(undefined)
   const modes: SelectMode[] = ['top', 'recent', 'mix']
 
   let w = $state(0)
@@ -360,15 +363,37 @@
         archive.recordFollows(await getFollowDids(did)).catch(() => {})
         // Gap-healing backfill: page the timeline backward to import history
         // from before this session (throttled; stops at the archived boundary).
-        // Runs silently in the background; the corpus grows. Surfaced later by
-        // the archive UI (deferred).
-        backfill(APP_MOUNT).catch(() => {})
+        backfilling = true
+        backfill(APP_MOUNT, { onProgress: (r) => (backfillStatus = r) })
+          .then((r) => (backfillStatus = r))
+          .catch(() => {})
+          .finally(() => (backfilling = false))
       })
       .catch(() => {
         /* archive unavailable (private mode / no IndexedDB) — the digest still
            works in-memory, just not persisted. */
       })
   })
+
+  // Poll archive stats while the config popover is open, so the corpus counts
+  // update live as the feed loads and backfill pages in.
+  $effect(() => {
+    if (!showConfig) return
+    const tick = () => archive.stats().then((s) => (archiveStats = s)).catch(() => {})
+    tick()
+    const id = setInterval(tick, 1500)
+    return () => clearInterval(id)
+  })
+
+  async function exportArchive() {
+    const json = await archive.exportJSON()
+    const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `skynets-corpus-${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
 
   // ── force layout lifecycle ────────────────────────────────────────────────
   let layout: ForceLayout | undefined
@@ -810,6 +835,23 @@
           <span class="val"></span>
         </div>
         <p class="hint">Label every card's provenance; click the 🧭 line to copy the raw post JSON.</p>
+
+        <div class="archive-box">
+          <div class="archive-head">
+            <span class="label">Corpus</span>
+            {#if backfilling}<span class="pulse">importing… {backfillStatus?.pages ?? 0}p</span>{/if}
+          </div>
+          {#if archiveStats}
+            <p class="hint archive-stats">
+              {archiveStats.posts.toLocaleString()} posts · {archiveStats.counts.toLocaleString()} count-samples ·
+              {archiveStats.follows} follows-snapshot{archiveStats.follows === 1 ? '' : 's'}
+              {#if backfillStatus}<br />backfill: {backfillStatus.imported} imported{backfillStatus.hitCap ? ' (hit page cap)' : ''}{/if}
+            </p>
+          {:else}
+            <p class="hint archive-stats">archive not open yet…</p>
+          {/if}
+          <button class="export-btn" onclick={exportArchive} disabled={!archiveStats?.posts}>Export corpus (JSON)</button>
+        </div>
       </div>
     {/if}
   </div>
@@ -1023,6 +1065,41 @@
   .seg button.on {
     background: var(--accent);
     color: #fff;
+  }
+  .archive-box {
+    margin-top: 0.3rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border);
+  }
+  .archive-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .archive-head .label {
+    color: var(--text-dim);
+  }
+  .pulse {
+    color: var(--accent);
+    font-size: 0.7rem;
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    50% {
+      opacity: 0.4;
+    }
+  }
+  .archive-stats {
+    margin: 0.35rem 0 0.5rem;
+    line-height: 1.5;
+  }
+  .export-btn {
+    width: 100%;
+    font-size: 0.75rem;
+    padding: 0.35rem;
+  }
+  .export-btn:disabled {
+    opacity: 0.5;
   }
   .hud {
     position: absolute;
