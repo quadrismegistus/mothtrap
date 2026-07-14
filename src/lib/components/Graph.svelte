@@ -5,6 +5,7 @@
     buildGraph,
     layoutPositions,
     parentUriOf,
+    rootUriOf,
     selectVisible,
     threadDescendants,
     type GraphNode,
@@ -283,6 +284,25 @@
     }),
   )
 
+  // What the classifier actually sees. With opsOnly, a reply is represented by
+  // its thread root (the substantive OP), deduped — so sibling replies + their
+  // OP collapse to one clean anchor instead of N noisy "lol yes" lines that the
+  // model tries (badly) to cluster. Replies whose root we haven't fetched fall
+  // back to themselves (their parent text is still inlined by promptLines).
+  function classifierInput(items: FeedItem[]): FeedItem[] {
+    if (!digest.opsOnly) return items.slice(0, digest.window)
+    const seen = new Set<string>()
+    const out: FeedItem[] = []
+    for (const it of items) {
+      const anchor = contextByUri.get(rootUriOf(it)) ?? it
+      if (seen.has(anchor.post.uri)) continue
+      seen.add(anchor.post.uri)
+      out.push(anchor)
+      if (out.length >= digest.window) break
+    }
+    return out
+  }
+
   async function summarize() {
     showDigest = true
     // Pull more pages until we have enough posts to fill the digest window (or
@@ -293,7 +313,7 @@
     while (feedItems.length < digest.window && cursor && !loading && guard++ < 12) {
       await load(true)
     }
-    digest.summarize(feedItems.slice(0, digest.window), contextByUri)
+    digest.summarize(classifierInput(feedItems), contextByUri)
   }
 
   // Click a conversation's exemplar in the panel → pin it and pop its card, so
@@ -553,7 +573,7 @@
         await load(true)
       }
     }
-    await digest.summarize(feedItems.slice(0, digest.window), contextByUri)
+    await digest.summarize(classifierInput(feedItems), contextByUri)
   }
   $effect(() => {
     if (!digest.continuous) return

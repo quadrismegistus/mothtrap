@@ -82,6 +82,15 @@
       <span>Continuous (rolling)</span>
     </label>
 
+    <label class="row toggle">
+      <input type="checkbox" bind:checked={digest.opsOnly} />
+      <span>Cluster on originals only</span>
+    </label>
+    <p class="note sub">
+      Feeds the classifier each thread's original post, not the replies — reply text is noisy and
+      tends to muddy the conversations.
+    </p>
+
     {#if digest.continuous}
       <p class="engine-status">
         {#if digest.loading}
@@ -359,6 +368,11 @@
     color: var(--text-dim);
     font-size: 0.68rem;
     line-height: 1.4;
+  }
+  .note.sub {
+    margin-top: -0.2rem;
+    padding-left: 1.5rem;
+    font-size: 0.62rem;
   }
   .err {
     margin: 0;

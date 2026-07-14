@@ -19,6 +19,7 @@ interface Persisted {
   ollamaUrl: string
   window: number
   continuous: boolean
+  opsOnly: boolean
 }
 
 /** How many posts to send to the digest. ~70 was the sweet spot in testing:
@@ -52,6 +53,12 @@ class DigestState {
   /** Continuous mode: maintain a rolling digest via the engine (embed → gate →
    * establish/roll/skip) instead of a fresh full digest each press (PLAN §7). */
   continuous = $state(false)
+  /** Feed only thread OPs to the classifier (a reply is anchored to its root),
+   * not the replies themselves. Reply text ("lol yes", "exactly") is noise that
+   * muddies clustering even with parent context inlined; the substantive OP is
+   * the right unit of a "conversation". Replies fold back into their OP's
+   * conversation structurally in the graph. */
+  opsOnly = $state(true)
   digest = $state<Digest | undefined>(undefined)
   loading = $state(false)
   error = $state<string | undefined>(undefined)
@@ -70,6 +77,7 @@ class DigestState {
     if (typeof p.ollamaUrl === 'string') this.ollamaUrl = p.ollamaUrl
     if (typeof p.window === 'number' && p.window > 0) this.window = p.window
     if (typeof p.continuous === 'boolean') this.continuous = p.continuous
+    if (typeof p.opsOnly === 'boolean') this.opsOnly = p.opsOnly
 
     if (typeof localStorage !== 'undefined') {
       $effect.root(() => {
@@ -81,6 +89,7 @@ class DigestState {
             ollamaUrl: this.ollamaUrl,
             window: this.window,
             continuous: this.continuous,
+            opsOnly: this.opsOnly,
           }
           localStorage.setItem(KEY, JSON.stringify(data))
         })

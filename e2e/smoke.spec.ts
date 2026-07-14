@@ -290,7 +290,7 @@ test('continuous mode auto-establishes without pressing Update (demo)', async ({
   await page.locator('.digest-btn').click()
   await page.locator('.convos > li').first().waitFor()
   // Turn on continuous — auto-cadence should establish on its own (no Update click).
-  await page.locator('.toggle input[type=checkbox]').check()
+  await page.locator('.toggle', { hasText: 'Continuous' }).locator('input[type=checkbox]').check()
   await expect(page.locator('.engine-status')).toContainText(/auto-updating/, { timeout: 5000 })
   await expect(page.locator('.convos > li').first()).toBeVisible()
 })
