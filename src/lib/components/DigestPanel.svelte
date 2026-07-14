@@ -51,7 +51,14 @@
 <aside class="panel">
   <header>
     <strong>Conversations</strong>
-    <button class="x" onclick={onclose} title="Close">✕</button>
+    <div class="head-actions">
+      {#if digest.digest || digest.engine.clusters.length}
+        <button class="reset" onclick={() => digest.clear()} title="Clear conversations and re-establish from scratch">
+          Reset
+        </button>
+      {/if}
+      <button class="x" onclick={onclose} title="Close">✕</button>
+    </div>
   </header>
 
   <div class="controls">
@@ -220,6 +227,24 @@
     color: var(--text-dim);
     font-size: 0.9rem;
     cursor: pointer;
+  }
+  .head-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .reset {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-dim);
+    font-size: 0.7rem;
+    padding: 0.2rem 0.5rem;
+    cursor: pointer;
+  }
+  .reset:hover {
+    border-color: var(--danger, #e0684f);
+    color: var(--danger, #e0684f);
   }
   .controls {
     padding: 0.8rem 0.9rem;

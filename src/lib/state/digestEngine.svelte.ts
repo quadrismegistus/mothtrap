@@ -120,6 +120,9 @@ export class DigestEngine {
     }
   }
 
+  /** Clear the rolling clusters (in memory AND persisted) so the next run
+   * re-establishes from scratch. Keeps the archive's posts/vectors — only the
+   * cluster labels/assignments are discarded. */
   reset() {
     this.clusters = []
     this.#buffer = []
@@ -129,6 +132,7 @@ export class DigestEngine {
     this.phase = 'idle'
     this.error = undefined
     this.lastGate = undefined
+    void archive.putDigest([]).catch(() => {})
   }
 
   #centroidOf(uris: string[]): number[] {
