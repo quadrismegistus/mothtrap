@@ -383,7 +383,7 @@
   // point offset perpendicular to the chord. The bow makes it unambiguous which
   // two nodes an edge joins even when a third node sits on the straight line
   // between them — the edge arcs clear of it rather than passing through.
-  function curvePath(x1: number, y1: number, x2: number, y2: number, frac = 0.16, cap = 34) {
+  function curvePath(x1: number, y1: number, x2: number, y2: number, frac = 0.24, cap = 50) {
     const dx = x2 - x1
     const dy = y2 - y1
     const len = Math.hypot(dx, dy) || 1
@@ -790,7 +790,7 @@
   <svg class="annotations" width={w} height={h}>
     {#each topics as a (a.id)}
       {#each a.members as m}
-        <path d={curvePath(a.tx, a.ty, m.x, m.y, 0.12, 26)} fill="none" stroke={a.color} />
+        <path d={curvePath(a.tx, a.ty, m.x, m.y, 0.18, 40)} fill="none" stroke={a.color} />
       {/each}
     {/each}
   </svg>
@@ -1056,6 +1056,7 @@
     stroke: var(--text-dim);
     stroke-width: 1.4;
     opacity: 0.7;
+    stroke-dasharray: 5 4;
   }
   .edges marker path {
     fill: var(--text-dim);
