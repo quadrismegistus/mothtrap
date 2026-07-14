@@ -293,6 +293,17 @@ test('continuous mode auto-establishes without pressing Update (demo)', async ({
   await expect(page.locator('.convos > li').first()).toBeVisible()
 })
 
+test('pressing D on a topic node dismisses its whole conversation', async ({ page }) => {
+  await graphReady(page)
+  await page.locator('.digest-btn').click()
+  await page.locator('.topic-node').first().waitFor()
+  await page.locator('.topic-node').first().hover()
+  await page.keyboard.press('d')
+  await page.waitForTimeout(500)
+  // Its member posts are marked read → the dismissed counter shows.
+  await expect(page.locator('.dismissed-count')).toBeVisible()
+})
+
 test('help dialog opens and closes', async ({ page }) => {
   await graphReady(page)
   await page.locator('.help').click()

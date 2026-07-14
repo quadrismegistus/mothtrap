@@ -45,6 +45,7 @@
   let loading = $state(false)
   let error = $state<string | undefined>(undefined)
   let hovered = $state<string | null>(null)
+  let hoveredTopic = $state<string | null>(null)
 
   // View preferences (node limit, selection mode, auto-cycle) live in a
   // persisted store; turnover offset and popover visibility are ephemeral.
@@ -635,6 +636,20 @@
     if (hovered && all.includes(hovered)) hovered = null
   }
 
+  // Dismiss a whole conversation from its topic node: every member post (plus
+  // reply subtrees) is marked read at once.
+  function dismissTopic(convoId: string) {
+    const m = topicMembership.find((t) => t.id === convoId)
+    if (!m) return
+    const all = new Set<string>()
+    for (const u of m.uris) {
+      all.add(u)
+      for (const d of threadDescendants(allItems, u)) all.add(d)
+    }
+    read.dismissMany([...all])
+    if (hovered && all.has(hovered)) hovered = null
+  }
+
   // Distinguish single click (pin the node) from double click (open on bsky.app):
   // a lone click waits ~220ms for a possible double.
   let clickTimer: ReturnType<typeof setTimeout> | undefined
@@ -669,7 +684,8 @@
     if (e.key === 'Escape') {
       hovered = null
       showConfig = false
-    } else if (k === 'd' && hovered) dismiss(hovered)
+    } else if (k === 'd' && hoveredTopic) dismissTopic(hoveredTopic)
+    else if (k === 'd' && hovered) dismiss(hovered)
     else if (k === 'r') load(true)
     else if (k === 'n') nextBatch()
     else if (k === 'l') turnoverOffset = 0
@@ -759,7 +775,9 @@
       class="topic-node"
       class:pinned={pinned.has(a.sid)}
       style="left: {a.tx}px; top: {a.ty}px; --c: {a.color}"
-      title="Drag to pull its posts together · click to pin"
+      title="Drag to pull its posts together · click to pin · D to dismiss the whole conversation"
+      onmouseenter={() => (hoveredTopic = a.id)}
+      onmouseleave={() => (hoveredTopic = null)}
       onpointerdown={(e) => onTopicPointerDown(e, a.sid)}
     >
       {a.label}
