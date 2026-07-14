@@ -122,7 +122,10 @@
     for (const it of feedItems) if (parentUriOf(it)) s.add(it.post.uri)
     return s
   })
-  const graph = $derived(buildGraph(visible, expandedForBuild, primaryUris))
+  // `expandedForBuild` (manual ∪ auto reply-chains) controls collapse; the raw
+  // manual `expanded` set is passed separately so only user-mapped threads are
+  // force-shown — auto reply-chain context stays under the node budget.
+  const graph = $derived(buildGraph(visible, expandedForBuild, primaryUris, expanded))
 
   // Only primary nodes compete for the window, so the queue/turnover counts
   // are over them; context nodes ride along and don't inflate the numbers.
