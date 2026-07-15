@@ -142,6 +142,25 @@
       its post rather than getting its own pill.
     </p>
 
+    {#if digest.labelMode}
+      <div class="row window sub">
+        <span>Merge</span>
+        <input
+          type="range"
+          min="0.4"
+          max="0.9"
+          step="0.02"
+          bind:value={digest.mergeThreshold}
+          oninput={() => digest.regroupLabels()}
+        />
+        <span class="wval">{digest.mergeThreshold.toFixed(2)}</span>
+      </div>
+      <p class="note sub">
+        How alike two topics must be (by meaning) to merge into one conversation. Lower = more
+        merging (fewer, broader topics); higher = stricter (more one-off captions).
+      </p>
+    {/if}
+
     {#if digest.continuous}
       <p class="engine-status">
         {#if digest.loading}
@@ -363,6 +382,14 @@
     color: var(--text-dim);
     font-size: 0.72rem;
     min-width: 3em;
+  }
+  .window.sub {
+    padding-left: 1.5rem;
+    align-items: center;
+  }
+  .window.sub span:first-child {
+    min-width: 3.5em;
+    font-size: 0.68rem;
   }
   .window input[type='range'] {
     flex: 1 1 0;

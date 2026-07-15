@@ -334,15 +334,32 @@ test('a mutual is marked "follows you" on its card', async ({ page }) => {
   expect(seen).toBe(true)
 })
 
-test('per-post label mode tags nodes with captions', async ({ page }) => {
+test('per-post label mode tags nodes and groups by topic', async ({ page }) => {
   await graphReady(page)
   await page.locator('.digest-btn').click()
   await page.locator('.toggle', { hasText: 'Label each post' }).locator('input').check()
-  await page.locator('button', { hasText: /Summarize|Update digest|Re-summarize/ }).first().click()
-  // Each labeled post gets a caption under it (demo labels are all distinct, so
-  // they render as singleton captions rather than shared-topic pills).
+  await page.locator('button.go').first().click()
+  // Labels land, then group by embedding: shared topics become pills, one-offs
+  // become captions under their node. At least the caption path should show.
   await expect(page.locator('.node-caption').first()).toBeVisible({ timeout: 8000 })
-  expect(await page.locator('.node-caption').count()).toBeGreaterThan(3)
+  const captions = await page.locator('.node-caption').count()
+  const pills = await page.locator('.topic-node').count()
+  expect(captions + pills).toBeGreaterThan(2)
+  expect(await page.locator('.convos > li').count()).toBeGreaterThan(0)
+})
+
+test('merge slider re-groups labels without re-labeling', async ({ page }) => {
+  await graphReady(page)
+  await page.locator('.digest-btn').click()
+  await page.locator('.toggle', { hasText: 'Label each post' }).locator('input').check()
+  await page.locator('button.go').first().click()
+  await page.locator('.convos > li').first().waitFor()
+  const before = await page.locator('.convos > li').count()
+  // Crank the threshold to the strictest — fewer merges → at least as many groups.
+  await page.locator('.row.window.sub', { hasText: 'Merge' }).locator('input').fill('0.9')
+  await page.waitForTimeout(300)
+  const after = await page.locator('.convos > li').count()
+  expect(after).toBeGreaterThanOrEqual(before)
 })
 
 test('help dialog opens and closes', async ({ page }) => {

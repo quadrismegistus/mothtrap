@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { groupByLabel } from './labelGroup'
+import { groupByLabel, groupByEmbedding } from './labelGroup'
+import { norm } from './embed'
 import { cleanLabel } from './llm'
 
 describe('groupByLabel', () => {
@@ -58,6 +59,71 @@ describe('groupByLabel', () => {
     ])
     expect(d.conversations).toHaveLength(1)
     expect(d.conversations[0].postUris).toEqual(['b'])
+  })
+})
+
+describe('groupByEmbedding', () => {
+  // Hand-built unit vectors: A/A' are near each other, B is orthogonal.
+  const vA = norm([1, 0.05, 0])
+  const vA2 = norm([0.95, 0.1, 0]) // ~cos 0.99 with vA
+  const vB = norm([0, 0, 1]) // orthogonal to both
+  const vecs = new Map<string, number[]>([
+    ['Gaza ceasefire', vA],
+    ['Israel truce', vA2],
+    ['Baseball trades', vB],
+  ])
+
+  it('merges labels whose embeddings are close, though they share no token', () => {
+    const d = groupByEmbedding(
+      [
+        { uri: 'a', label: 'Gaza ceasefire' },
+        { uri: 'b', label: 'Israel truce' },
+        { uri: 'c', label: 'Baseball trades' },
+      ],
+      vecs,
+      0.7,
+    )
+    expect(d.conversations).toHaveLength(2)
+    const merged = d.conversations.find((c) => c.postUris.includes('a'))!
+    expect(merged.postUris.sort()).toEqual(['a', 'b'])
+  })
+
+  it('keeps them apart when the threshold is above their similarity', () => {
+    const d = groupByEmbedding(
+      [
+        { uri: 'a', label: 'Gaza ceasefire' },
+        { uri: 'b', label: 'Israel truce' },
+      ],
+      vecs,
+      0.999, // stricter than cos(vA, vA2)
+    )
+    expect(d.conversations).toHaveLength(2)
+  })
+
+  it('gives a label with no vector its own cluster', () => {
+    const d = groupByEmbedding(
+      [
+        { uri: 'a', label: 'Gaza ceasefire' },
+        { uri: 'b', label: 'Unknown topic' },
+      ],
+      vecs,
+      0.5,
+    )
+    expect(d.conversations).toHaveLength(2)
+  })
+
+  it('picks the most common wording as canonical across merged labels', () => {
+    const d = groupByEmbedding(
+      [
+        { uri: 'a', label: 'Israel truce' },
+        { uri: 'b', label: 'Israel truce' },
+        { uri: 'c', label: 'Gaza ceasefire' },
+      ],
+      vecs,
+      0.7,
+    )
+    expect(d.conversations).toHaveLength(1)
+    expect(d.conversations[0].label).toBe('Israel truce')
   })
 })
 

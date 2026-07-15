@@ -1,9 +1,16 @@
+import { centroid, cosine } from './embed'
 import type { Digest } from './llm'
 
 export interface LabeledPost {
   uri: string
   label: string
 }
+
+/** Default cosine cutoff for merging two labels' embeddings into one topic.
+ * all-minilm on short phrases: same-topic pairs cluster well above this, most
+ * different-topic pairs below. Exposed as a slider since it's the one knob that
+ * wants tuning per-feed. */
+export const DEFAULT_MERGE_THRESHOLD = 0.68
 
 const STOP = new Set([
   'the', 'a', 'an', 'to', 'of', 'in', 'on', 'and', 'is', 'it', 'for', 'with',
@@ -89,6 +96,77 @@ export function groupByLabel(posts: LabeledPost[]): Digest {
       summary: '',
       status: 'steady' as const,
       postUris: g.uris,
+    }
+  })
+  return { conversations }
+}
+
+interface VecCluster {
+  vecs: number[][]
+  centroid: number[]
+  labels: Map<string, number>
+  uris: string[]
+}
+
+/**
+ * Group per-post labels by the cosine similarity of their embeddings — so
+ * "Gaza ceasefire" and "Israel–Hamas truce" merge though they share no literal
+ * token (which is exactly what the token-overlap grouping misses). Greedy
+ * nearest-centroid assignment over unique labels, in first-seen order (stable
+ * for a streaming rebuild). Labels with no vector fall back to their own
+ * cluster. Canonical label = most common wording. Singletons kept.
+ */
+export function groupByEmbedding(
+  posts: LabeledPost[],
+  vecByLabel: Map<string, number[]>,
+  threshold = DEFAULT_MERGE_THRESHOLD,
+): Digest {
+  const clusters: VecCluster[] = []
+  const clusterOf = new Map<string, VecCluster>() // label → its cluster
+
+  for (const { uri, label } of posts) {
+    if (!label) continue
+    let cluster = clusterOf.get(label)
+    if (!cluster) {
+      const v = vecByLabel.get(label)
+      // Find the nearest existing cluster within threshold, else start a new one.
+      if (v && v.length) {
+        let best: VecCluster | undefined
+        let bestSim = threshold
+        for (const c of clusters) {
+          if (!c.centroid.length) continue
+          const s = cosine(v, c.centroid)
+          if (s >= bestSim) {
+            bestSim = s
+            best = c
+          }
+        }
+        if (best) {
+          best.vecs.push(v)
+          best.centroid = centroid(best.vecs)
+          cluster = best
+        }
+      }
+      if (!cluster) {
+        cluster = { vecs: v && v.length ? [v] : [], centroid: v && v.length ? v : [], labels: new Map(), uris: [] }
+        clusters.push(cluster)
+      }
+      clusterOf.set(label, cluster)
+    }
+    if (!cluster.uris.includes(uri)) cluster.uris.push(uri)
+    cluster.labels.set(label, (cluster.labels.get(label) ?? 0) + 1)
+  }
+
+  const conversations = clusters.map((c) => {
+    const canonical = [...c.labels.entries()].sort(
+      (a, b) => b[1] - a[1] || a[0].length - b[0].length,
+    )[0][0]
+    return {
+      id: slug(canonical),
+      label: canonical,
+      summary: '',
+      status: 'steady' as const,
+      postUris: c.uris,
     }
   })
   return { conversations }

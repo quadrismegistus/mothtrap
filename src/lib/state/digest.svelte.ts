@@ -8,7 +8,8 @@ import {
   type Provider,
   type SummarizeOpts,
 } from '../api/llm'
-import { groupByLabel } from '../api/labelGroup'
+import { DEFAULT_MERGE_THRESHOLD, groupByEmbedding, groupByLabel } from '../api/labelGroup'
+import { embedTexts } from '../api/embed'
 import type { FeedItem } from '../api/timeline'
 import { DigestEngine } from './digestEngine.svelte'
 
@@ -23,6 +24,7 @@ interface Persisted {
   continuous: boolean
   opsOnly: boolean
   labelMode: boolean
+  mergeThreshold: number
 }
 
 /** How many posts to send to the digest. ~70 was the sweet spot in testing:
@@ -66,8 +68,16 @@ class DigestState {
    * then group shared labels into conversations (PLAN §7 variant). More robust
    * on a small local model than the one-shot clustering prompt. */
   labelMode = $state(false)
+  /** Cosine cutoff for merging two labels into one topic (label mode). Tunable
+   * because it's the one knob that wants per-feed calibration. */
+  mergeThreshold = $state(DEFAULT_MERGE_THRESHOLD)
   /** uri → label cache, so continuous re-labeling only touches new posts. */
   #labels = new Map<string, string>()
+  /** label → embedding cache, so re-grouping (e.g. threshold slider) is free. */
+  #labelVecs = new Map<string, number[]>()
+  /** The OP set from the last label pass, so a threshold change can re-group
+   * without re-labeling. */
+  #lastLabelItems: FeedItem[] = []
   digest = $state<Digest | undefined>(undefined)
   loading = $state(false)
   error = $state<string | undefined>(undefined)
@@ -88,6 +98,7 @@ class DigestState {
     if (typeof p.continuous === 'boolean') this.continuous = p.continuous
     if (typeof p.opsOnly === 'boolean') this.opsOnly = p.opsOnly
     if (typeof p.labelMode === 'boolean') this.labelMode = p.labelMode
+    if (typeof p.mergeThreshold === 'number') this.mergeThreshold = p.mergeThreshold
 
     if (typeof localStorage !== 'undefined') {
       $effect.root(() => {
@@ -101,6 +112,7 @@ class DigestState {
             continuous: this.continuous,
             opsOnly: this.opsOnly,
             labelMode: this.labelMode,
+            mergeThreshold: this.mergeThreshold,
           }
           localStorage.setItem(KEY, JSON.stringify(data))
         })
@@ -146,25 +158,52 @@ class DigestState {
     }
   }
 
-  /** Per-post labeling: label the OPs we haven't seen, rebuilding the grouped
-   * digest as each label streams in. The uri→label cache persists across calls,
-   * so continuous ticks only pay for genuinely new posts; the digest is rebuilt
-   * over the CURRENT window so posts that scrolled off drop out. */
+  /** Per-post labeling: label the OPs we haven't seen, then group by embedding
+   * similarity. The uri→label and label→vector caches persist across calls, so
+   * continuous ticks only pay for genuinely new posts. During labeling the fast
+   * token-merge grouping gives live feedback; once labels are in, an embedding
+   * pass re-groups more accurately (merging topics that share no literal word).
+   * The digest is rebuilt over the CURRENT window so posts that scrolled off
+   * drop out. */
   async #labelIngest(items: FeedItem[]) {
-    const rebuild = () => {
-      this.digest = groupByLabel(
-        items.map((i) => ({ uri: i.post.uri, label: this.#labels.get(i.post.uri) ?? '' })),
-      )
-    }
-    rebuild() // reflect cached labels immediately (drops off-window posts)
+    this.#lastLabelItems = items
+    const posts = () =>
+      items.map((i) => ({ uri: i.post.uri, label: this.#labels.get(i.post.uri) ?? '' }))
+    this.digest = groupByLabel(posts()) // reflect cached labels immediately
     const todo = items.filter((i) => !this.#labels.has(i.post.uri))
     if (todo.length) {
       await labelFeed(todo, this.#opts(), (uri, label) => {
         this.#labels.set(uri, label)
-        rebuild()
+        this.digest = groupByLabel(posts()) // fast live grouping while streaming
       })
-      rebuild()
     }
+    await this.#embedRegroup(posts().filter((p) => p.label))
+  }
+
+  /** Embed any not-yet-embedded labels (cached), then group by cosine. Falls
+   * back to the token merge if embeddings are unavailable (e.g. no Ollama). */
+  async #embedRegroup(posts: { uri: string; label: string }[]) {
+    const labels = [...new Set(posts.map((p) => p.label))]
+    const need = labels.filter((l) => !this.#labelVecs.has(l))
+    try {
+      if (need.length) {
+        const vecs = await embedTexts(need, { ollamaUrl: this.ollamaUrl })
+        need.forEach((l, i) => vecs[i] && this.#labelVecs.set(l, vecs[i]))
+      }
+      this.digest = groupByEmbedding(posts, this.#labelVecs, this.mergeThreshold)
+    } catch {
+      this.digest = groupByLabel(posts) // no embeddings → keep token grouping
+    }
+  }
+
+  /** Re-group the already-labeled posts at the current threshold, using cached
+   * label vectors — no re-labeling or re-embedding. Drives the merge slider. */
+  regroupLabels() {
+    if (!this.labelMode || !this.#lastLabelItems.length) return
+    const posts = this.#lastLabelItems
+      .map((i) => ({ uri: i.post.uri, label: this.#labels.get(i.post.uri) ?? '' }))
+      .filter((p) => p.label)
+    this.digest = groupByEmbedding(posts, this.#labelVecs, this.mergeThreshold)
   }
 
   clear() {
@@ -172,6 +211,8 @@ class DigestState {
     this.error = undefined
     this.ranAt = undefined
     this.#labels.clear()
+    this.#labelVecs.clear()
+    this.#lastLabelItems = []
     this.engine.reset()
   }
 }
