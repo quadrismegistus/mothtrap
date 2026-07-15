@@ -23,7 +23,17 @@
   const stats = $derived(coverageBins(sorted, gran, trim))
   const effGran = $derived<Gran>(stats?.gran ?? 'day')
 
+  // Short date, for the summary/note (always day-level).
   const fmt = (t: number) => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' })
+  // Bin label at the current granularity — includes the hour when zoomed in, so
+  // a dip can be read as a clock time (local; bins are UTC-aligned, which lines
+  // up with local hours for whole-hour-offset zones like BST).
+  function fmtBin(t: number, g: Gran): string {
+    const d = new Date(t)
+    if (g === 'hour') return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric' })
+    if (g === 'month') return d.toLocaleDateString(undefined, { month: 'short', year: '2-digit' })
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  }
 </script>
 
 <svelte:window onkeydown={(e) => e.key === 'Escape' && onclose()} />
@@ -66,15 +76,15 @@
               width="0.8"
               height={(c / stats.peak) * 100}
             >
-              <title>{fmt(stats.start + i * stats.bucket)} · {c} post{c === 1 ? '' : 's'}</title>
+              <title>{fmtBin(stats.start + i * stats.bucket, effGran)} · {c} post{c === 1 ? '' : 's'}</title>
             </rect>
           {/if}
         {/each}
       </svg>
       <div class="axis">
-        <span>{fmt(stats.start)}</span>
-        <span>{fmt(stats.start + (stats.n / 2) * stats.bucket)}</span>
-        <span>{fmt(stats.start + stats.n * stats.bucket)}</span>
+        <span>{fmtBin(stats.start, effGran)}</span>
+        <span>{fmtBin(stats.start + Math.floor(stats.n / 2) * stats.bucket, effGran)}</span>
+        <span>{fmtBin(stats.start + stats.n * stats.bucket, effGran)}</span>
       </div>
       <p class="note">
         Bars are archived posts binned by when they were <em>posted</em>. Flat/empty stretches are
