@@ -2,11 +2,13 @@ import {
   DEFAULT_MODEL,
   DEFAULT_OLLAMA_MODEL,
   DEFAULT_OLLAMA_URL,
+  labelFeed,
   summarizeFeed,
   type Digest,
   type Provider,
   type SummarizeOpts,
 } from '../api/llm'
+import { groupByLabel } from '../api/labelGroup'
 import type { FeedItem } from '../api/timeline'
 import { DigestEngine } from './digestEngine.svelte'
 
@@ -20,6 +22,7 @@ interface Persisted {
   window: number
   continuous: boolean
   opsOnly: boolean
+  labelMode: boolean
 }
 
 /** How many posts to send to the digest. ~70 was the sweet spot in testing:
@@ -59,6 +62,12 @@ class DigestState {
    * the right unit of a "conversation". Replies fold back into their OP's
    * conversation structurally in the graph. */
   opsOnly = $state(true)
+  /** Per-post labeling mode: label each OP individually (many tiny prompts),
+   * then group shared labels into conversations (PLAN §7 variant). More robust
+   * on a small local model than the one-shot clustering prompt. */
+  labelMode = $state(false)
+  /** uri → label cache, so continuous re-labeling only touches new posts. */
+  #labels = new Map<string, string>()
   digest = $state<Digest | undefined>(undefined)
   loading = $state(false)
   error = $state<string | undefined>(undefined)
@@ -78,6 +87,7 @@ class DigestState {
     if (typeof p.window === 'number' && p.window > 0) this.window = p.window
     if (typeof p.continuous === 'boolean') this.continuous = p.continuous
     if (typeof p.opsOnly === 'boolean') this.opsOnly = p.opsOnly
+    if (typeof p.labelMode === 'boolean') this.labelMode = p.labelMode
 
     if (typeof localStorage !== 'undefined') {
       $effect.root(() => {
@@ -90,6 +100,7 @@ class DigestState {
             window: this.window,
             continuous: this.continuous,
             opsOnly: this.opsOnly,
+            labelMode: this.labelMode,
           }
           localStorage.setItem(KEY, JSON.stringify(data))
         })
@@ -115,7 +126,9 @@ class DigestState {
     this.error = undefined
     this.streamText = ''
     try {
-      if (this.continuous) {
+      if (this.labelMode) {
+        await this.#labelIngest(items)
+      } else if (this.continuous) {
         // Rolling engine: embed → gate → establish/roll/skip. It maintains its
         // own clusters across calls; we surface them as the digest.
         await this.engine.ingest(items, this.#opts(undefined, contextByUri))
@@ -133,10 +146,32 @@ class DigestState {
     }
   }
 
+  /** Per-post labeling: label the OPs we haven't seen, rebuilding the grouped
+   * digest as each label streams in. The uri→label cache persists across calls,
+   * so continuous ticks only pay for genuinely new posts; the digest is rebuilt
+   * over the CURRENT window so posts that scrolled off drop out. */
+  async #labelIngest(items: FeedItem[]) {
+    const rebuild = () => {
+      this.digest = groupByLabel(
+        items.map((i) => ({ uri: i.post.uri, label: this.#labels.get(i.post.uri) ?? '' })),
+      )
+    }
+    rebuild() // reflect cached labels immediately (drops off-window posts)
+    const todo = items.filter((i) => !this.#labels.has(i.post.uri))
+    if (todo.length) {
+      await labelFeed(todo, this.#opts(), (uri, label) => {
+        this.#labels.set(uri, label)
+        rebuild()
+      })
+      rebuild()
+    }
+  }
+
   clear() {
     this.digest = undefined
     this.error = undefined
     this.ranAt = undefined
+    this.#labels.clear()
     this.engine.reset()
   }
 }

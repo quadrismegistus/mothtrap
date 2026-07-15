@@ -231,15 +231,26 @@
   // most-active, conversation that claims it). Derived from the digest ALONE —
   // NOT from live positions — so it's stable across sim ticks. The sim inputs
   // below build on this; the render (annotations/topics) reads live positions.
-  const topicMembership = $derived.by(() => {
+  // Split conversations into pills (2+ posts → a topic node with edges) and
+  // captions (a lone post → its label tucked under the node, no pill/edge).
+  // Exclusive membership is assigned in one pass so a post can't feed both.
+  const topicView = $derived.by(() => {
     const convos = digest.digest?.conversations ?? []
     const claimed = new Set<string>()
-    return convos.map((c) => {
+    const pills: { id: string; sid: string; label: string; color: string; uris: string[] }[] = []
+    const captions = new Map<string, { label: string; color: string }>()
+    for (const c of convos) {
       const uris = c.postUris.filter((u) => !claimed.has(u))
       uris.forEach((u) => claimed.add(u))
-      return { id: c.id, sid: `topic:${c.id}`, label: c.label, color: convoColor(c.id), uris }
-    })
+      if (uris.length === 0) continue
+      const color = convoColor(c.id)
+      if (uris.length === 1) captions.set(uris[0], { label: c.label, color })
+      else pills.push({ id: c.id, sid: `topic:${c.id}`, label: c.label, color, uris })
+    }
+    return { pills, captions }
   })
+  const topicMembership = $derived(topicView.pills)
+  const nodeCaptions = $derived(topicView.captions)
 
   // Sim inputs use the members' STABLE target positions (not live ones), so the
   // topic targets don't shift every tick — which would restart the sim forever.
@@ -293,7 +304,7 @@
   // model tries (badly) to cluster. Replies whose root we haven't fetched fall
   // back to themselves (their parent text is still inlined by promptLines).
   function classifierInput(items: FeedItem[]): FeedItem[] {
-    if (!digest.opsOnly) return items.slice(0, digest.window)
+    if (!digest.opsOnly && !digest.labelMode) return items.slice(0, digest.window)
     const seen = new Set<string>()
     const out: FeedItem[] = []
     for (const it of items) {
@@ -820,6 +831,19 @@
     />
   {/each}
 
+  <!-- One-off topic labels: a caption tucked just under the post, no pill/edge. -->
+  {#each placed as p (p.node.uri)}
+    {@const cap = nodeCaptions.get(p.node.uri)}
+    {#if cap}
+      <div
+        class="node-caption"
+        style="left: {p.px}px; top: {p.py + p.size / 2 + 3}px; --c: {cap.color}"
+      >
+        {cap.label}
+      </div>
+    {/if}
+  {/each}
+
   {#each topics as a (a.id)}
     <button
       class="topic-node"
@@ -1059,6 +1083,22 @@
   }
   .topic-node:hover {
     background: color-mix(in srgb, var(--c) 22%, var(--bg-elev));
+  }
+  /* A one-off topic's label, centered just beneath its post node. */
+  .node-caption {
+    position: absolute;
+    transform: translate(-50%, 0);
+    max-width: 8rem;
+    font-size: 0.62rem;
+    font-weight: 600;
+    line-height: 1.1;
+    color: var(--c);
+    text-align: center;
+    pointer-events: none;
+    text-shadow:
+      0 1px 3px var(--bg),
+      0 0 4px var(--bg);
+    z-index: 2;
   }
   .topic-node.pinned {
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 60%, transparent);

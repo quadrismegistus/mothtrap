@@ -514,6 +514,124 @@ function demoRoll(newItems: FeedItem[]): RollUpdate[] {
   return [{ label: 'New Posts', isNew: true, uris: newItems.map((i) => i.post.uri) }]
 }
 
+// ── Per-post labeling (PLAN §7 variant) ─────────────────────────────────────
+// Instead of one big clustering prompt, ask the model for a short topic label
+// for each OP separately — a trivial task even a small local model nails every
+// time, and labels stream in one-by-one. Grouping (by shared label) happens
+// client-side in labelGroup.ts, so the model never has to emit an array.
+
+const LABEL_SYSTEM =
+  'You label a single social-media post with its topic. Reply with ONLY a 2–4 word topic label — no quotes, no punctuation, no explanation, no "Label:" prefix. Prefer the concrete subject (a person, event, or thing) over a vague category.'
+
+const LABEL_STOP = new Set([
+  'the', 'a', 'an', 'to', 'of', 'in', 'on', 'and', 'is', 'it', 'for', 'with',
+  'that', 'this', 'my', 'i', 'you', 'we', 'they', 'at', 'as', 'be', 'so', 'but',
+])
+
+/** Tidy a raw model label: first line, strip quotes/asterisks/prefixes, cap
+ * length. Empty string means "unusable" (caller drops it). */
+export function cleanLabel(raw: string): string {
+  let s = (raw.split('\n').find((l) => l.trim()) ?? '').trim()
+  s = s.replace(/^(label|topic)\s*:\s*/i, '')
+  s = s.replace(/^["'`*\s]+|["'`*.\s]+$/g, '')
+  s = s.replace(/\s+/g, ' ')
+  return s.split(' ').slice(0, 5).join(' ').slice(0, 48)
+}
+
+/** Offline/demo label: the first couple of content words, Title-cased. */
+function demoLabel(item: FeedItem): string {
+  const words = postText(item)
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !LABEL_STOP.has(w))
+    .slice(0, 2)
+  if (!words.length) return 'General chatter'
+  return words.map((w) => w[0].toUpperCase() + w.slice(1)).join(' ')
+}
+
+/** Plain-text chat completion (no JSON schema) — used for the tiny label task. */
+async function chatText(system: string, content: string, opts: SummarizeOpts): Promise<string> {
+  if (opts.provider === 'ollama') {
+    const base = (opts.ollamaUrl || DEFAULT_OLLAMA_URL).replace(/\/$/, '')
+    const res = await fetch(`${base}/api/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: opts.model,
+        stream: false,
+        think: false,
+        options: { temperature: 0.2, num_ctx: contextFor(system, content) },
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content },
+        ],
+      }),
+    })
+    if (!res.ok) throw new Error(`Ollama ${res.status}: ${res.statusText}`)
+    const data = (await res.json()) as { message?: { content?: string } }
+    return data.message?.content ?? ''
+  }
+  const res = await fetch(ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': opts.apiKey as string,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: opts.model,
+      max_tokens: 24,
+      system,
+      messages: [{ role: 'user', content }],
+    }),
+  })
+  if (!res.ok) throw new Error(`Anthropic API ${res.status}: ${res.statusText}`)
+  const data = (await res.json()) as { content?: { type: string; text?: string }[] }
+  return (data.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('')
+}
+
+/** Label one post. Falls back to a deterministic offline label in demo mode or
+ * when the cloud provider has no key. */
+async function labelOne(item: FeedItem, opts: SummarizeOpts): Promise<string> {
+  if (isDemo() || (opts.provider === 'anthropic' && !opts.apiKey)) return demoLabel(item)
+  const content = `Post by @${item.post.author.handle}:\n"${postText(item).replace(/\s+/g, ' ').slice(0, 400)}"`
+  return cleanLabel(await chatText(LABEL_SYSTEM, content, opts))
+}
+
+/** Called as each post's label lands, so the caller can rebuild the digest
+ * progressively (labels appear on the map one-by-one). */
+export type OnLabel = (uri: string, label: string) => void
+
+/**
+ * Label every post, a few concurrent at a time. A single local model instance
+ * serializes anyway, but a small pool keeps its pipe busy across prefills; the
+ * cloud can take more. Errors on one post just drop that label.
+ */
+export async function labelFeed(
+  items: FeedItem[],
+  opts: SummarizeOpts,
+  onLabel?: OnLabel,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  const queue = [...items]
+  const concurrency = opts.provider === 'anthropic' ? 6 : 2
+  const worker = async () => {
+    for (;;) {
+      const item = queue.shift()
+      if (!item) break
+      const label = await labelOne(item, opts).catch(() => '')
+      if (label) {
+        out.set(item.post.uri, label)
+        onLabel?.(item.post.uri, label)
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker))
+  return out
+}
+
 /** Exemplar posts for a conversation, loudest-by-velocity first. */
 export function exemplars(convo: Conversation, byUri: Map<string, FeedItem>, n = 3): FeedItem[] {
   return convo.postUris

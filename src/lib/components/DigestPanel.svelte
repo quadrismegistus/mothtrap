@@ -91,6 +91,16 @@
       tends to muddy the conversations.
     </p>
 
+    <label class="row toggle">
+      <input type="checkbox" bind:checked={digest.labelMode} />
+      <span>Label each post</span>
+    </label>
+    <p class="note sub">
+      Tags every original post with its own short topic (many tiny prompts instead of one big
+      one), then groups shared topics into conversations. A one-off topic sits as a caption under
+      its post rather than getting its own pill.
+    </p>
+
     {#if digest.continuous}
       <p class="engine-status">
         {#if digest.loading}

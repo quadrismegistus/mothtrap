@@ -334,6 +334,17 @@ test('a mutual is marked "follows you" on its card', async ({ page }) => {
   expect(seen).toBe(true)
 })
 
+test('per-post label mode tags nodes with captions', async ({ page }) => {
+  await graphReady(page)
+  await page.locator('.digest-btn').click()
+  await page.locator('.toggle', { hasText: 'Label each post' }).locator('input').check()
+  await page.locator('button', { hasText: /Summarize|Update digest|Re-summarize/ }).first().click()
+  // Each labeled post gets a caption under it (demo labels are all distinct, so
+  // they render as singleton captions rather than shared-topic pills).
+  await expect(page.locator('.node-caption').first()).toBeVisible({ timeout: 8000 })
+  expect(await page.locator('.node-caption').count()).toBeGreaterThan(3)
+})
+
 test('help dialog opens and closes', async ({ page }) => {
   await graphReady(page)
   await page.locator('.help').click()
