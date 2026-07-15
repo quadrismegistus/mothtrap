@@ -68,6 +68,9 @@
   // Threads the user has mapped in (by thread root uri), and pinned nodes (by uri).
   const expanded = new SvelteSet<string>()
   const pinned = new SvelteSet<string>()
+  // Topic pills the user double-clicked to reveal ALL their member posts (by
+  // conversation id), even those the node budget would otherwise leave off.
+  const revealedTopics = new SvelteSet<string>()
 
   // The single source of truth for what counts as "your feed": the Reposts
   // and Follows-only toggles apply HERE, before anything downstream (primary
@@ -135,6 +138,16 @@
   // Which nodes to show (top/recent/mix), plus pinned nodes and — when "connect
   // replies" is on — the present ancestor chain of each shown node, so a reply is
   // drawn connected to the post it replies to. Layout is computed over this set.
+  // Member uris of every topic the user revealed (double-clicked its pill).
+  const revealedUris = $derived.by(() => {
+    const s = new Set<string>()
+    if (!revealedTopics.size) return s
+    for (const c of digest.digest?.conversations ?? []) {
+      if (revealedTopics.has(c.id)) for (const u of c.postUris) s.add(u)
+    }
+    return s
+  })
+
   const visibleNodes = $derived.by(() => {
     const selected = selectVisible(
       graph.nodes,
@@ -143,9 +156,13 @@
       turnoverOffset,
     )
     const connect = settings.connectReplies || settings.replyChains
-    if (!pinned.size && !connect) return selected
+    if (!pinned.size && !connect && !revealedUris.size) return selected
     const set = new Map(selected.map((n) => [n.uri, n]))
     for (const n of graph.nodes) if (pinned.has(n.uri) && !set.has(n.uri)) set.set(n.uri, n)
+    // A revealed topic's posts come in whole, ignoring the budget — the user
+    // asked for the whole conversation.
+    if (revealedUris.size)
+      for (const n of graph.nodes) if (revealedUris.has(n.uri) && !set.has(n.uri)) set.set(n.uri, n)
     if (connect) {
       // Pulled-in parent chains are added ONLY up to a total budget, so a few
       // deep threads can't balloon a limit-10 graph to 100+ nodes. Each selected
@@ -366,7 +383,14 @@
     if (pinned.has(id)) pinned.delete(id)
     else pinned.add(id)
   }
-  function onTopicPointerDown(e: PointerEvent, id: string) {
+  // Double-click a pill → reveal (or re-hide) ALL its member posts, even the
+  // ones the node budget dropped. The whole conversation comes into view.
+  function toggleReveal(convoId: string) {
+    if (revealedTopics.has(convoId)) revealedTopics.delete(convoId)
+    else revealedTopics.add(convoId)
+  }
+  let lastTopicClick = { id: '', t: 0 }
+  function onTopicPointerDown(e: PointerEvent, sid: string, convoId: string) {
     e.preventDefault()
     const sx = e.clientX
     const sy = e.clientY
@@ -374,14 +398,26 @@
     const move = (ev: PointerEvent) => {
       if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 4) return
       moved = true
-      onNodeDrag(id, ev.clientX, ev.clientY)
+      onNodeDrag(sid, ev.clientX, ev.clientY)
     }
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
       window.removeEventListener('pointercancel', up)
-      if (moved) onNodeDragEnd(id)
-      else togglePinUri(id)
+      if (moved) {
+        onNodeDragEnd(sid)
+        return
+      }
+      // Distinguish a double-click (reveal all posts) from a single click (pin).
+      const now = Date.now()
+      if (lastTopicClick.id === sid && now - lastTopicClick.t < 320) {
+        togglePinUri(sid) // undo the first click's pin toggle
+        toggleReveal(convoId)
+        lastTopicClick = { id: '', t: 0 }
+      } else {
+        togglePinUri(sid)
+        lastTopicClick = { id: sid, t: now }
+      }
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
@@ -717,6 +753,7 @@
       for (const d of threadDescendants(allItems, u)) all.add(d)
     }
     read.dismissMany([...all])
+    revealedTopics.delete(convoId)
     if (hovered && all.has(hovered)) hovered = null
   }
 
@@ -855,11 +892,12 @@
     <button
       class="topic-node"
       class:pinned={pinned.has(a.sid)}
+      class:revealed={revealedTopics.has(a.id)}
       style="left: {a.tx}px; top: {a.ty}px; --c: {a.color}"
-      title="Drag to pull its posts together · click to pin · D to dismiss the whole conversation"
+      title="Drag to pull its posts together · click to pin · double-click to reveal all its posts · D to dismiss the whole conversation"
       onmouseenter={() => (hoveredTopic = a.id)}
       onmouseleave={() => (hoveredTopic = null)}
-      onpointerdown={(e) => onTopicPointerDown(e, a.sid)}
+      onpointerdown={(e) => onTopicPointerDown(e, a.sid, a.id)}
     >
       {a.label}
     </button>
@@ -1109,6 +1147,10 @@
   }
   .topic-node.pinned {
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 60%, transparent);
+  }
+  .topic-node.revealed {
+    background: color-mix(in srgb, var(--c) 30%, var(--bg-elev));
+    color: var(--text);
   }
   .edges path {
     fill: none;

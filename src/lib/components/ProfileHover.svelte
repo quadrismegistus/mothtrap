@@ -48,9 +48,7 @@
     <button
       class="ph-follow"
       class:following
-      onclick={() => {
-        if (!following || confirm(`Unfollow @${author.handle}?`)) follows.toggle(author)
-      }}
+      onclick={() => follows.toggle(author)}
     >
       {following ? 'Following' : 'Follow'}
     </button>

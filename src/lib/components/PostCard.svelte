@@ -61,7 +61,7 @@
   const rtFollowing = $derived(rt && rt.did ? follows.following(rt) : false)
   function toggleReposter() {
     if (!rt || !rt.did) return
-    if (!rtFollowing || confirm(`Unfollow @${rt.handle}?`)) follows.toggle(rt)
+    follows.toggle(rt)
   }
   const liked = $derived(interactions.liked(item))
   const reposted = $derived(interactions.reposted(item))
@@ -175,14 +175,7 @@
       <button
         class="follow"
         class:following
-        onclick={() => {
-          // Unfollowing is easy to hit by accident and quietly reshapes the
-          // whole graph (the account's posts start rendering as strangers'),
-          // so it asks; following stays one click.
-          if (!following || confirm(`Unfollow @${item.post.author.handle}?`)) {
-            follows.toggle(item.post.author)
-          }
-        }}
+        onclick={() => follows.toggle(item.post.author)}
       >
         {following ? 'Following' : 'Follow'}
       </button>
