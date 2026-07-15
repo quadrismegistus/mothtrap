@@ -1,18 +1,13 @@
 <script lang="ts">
   import { archive } from '../state/archive'
+  import { coverageBins, type Gran } from '../state/coverage'
 
   let { onclose }: { onclose: () => void } = $props()
 
-  type Gran = 'hour' | 'day' | 'week' | 'month'
   const GRANS: Gran[] = ['hour', 'day', 'week', 'month']
-  const BUCKET_MS: Record<Gran, number> = {
-    hour: 3_600_000,
-    day: 86_400_000,
-    week: 604_800_000,
-    month: 2_592_000_000, // ~30 days; a rough month is fine for a histogram
-  }
 
-  let gran = $state<Gran>('day')
+  let gran = $state<Gran | null>(null) // null = auto from the (trimmed) span
+  let trim = $state(true) // focus the dense region; ancient context posts hidden
   let rows = $state<{ createdAt: number; firstSeen: number }[]>([])
   let loading = $state(true)
 
@@ -24,31 +19,9 @@
       .finally(() => (loading = false))
   })
 
-  const stats = $derived.by(() => {
-    const times = rows.map((r) => r.createdAt).filter((t) => t > 0)
-    if (times.length === 0) return null
-    const b = BUCKET_MS[gran]
-    let min = Infinity
-    let max = -Infinity
-    for (const t of times) {
-      if (t < min) min = t
-      if (t > max) max = t
-    }
-    const start = Math.floor(min / b) * b
-    const n = Math.min(Math.floor((max - start) / b) + 1, 4000) // cap the bar count
-    const counts = new Array(n).fill(0)
-    for (const t of times) {
-      const i = Math.floor((t - start) / b)
-      if (i >= 0 && i < n) counts[i]++
-    }
-    let peak = 1
-    let empties = 0
-    for (const c of counts) {
-      if (c > peak) peak = c
-      if (c === 0) empties++
-    }
-    return { counts, start, bucket: b, n, peak, empties, total: times.length, min, max }
-  })
+  const sorted = $derived(rows.map((r) => r.createdAt))
+  const stats = $derived(coverageBins(sorted, gran, trim))
+  const effGran = $derived<Gran>(stats?.gran ?? 'day')
 
   const fmt = (t: number) => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' })
 </script>
@@ -63,7 +36,7 @@
       <strong>Archive coverage</strong>
       <div class="grans">
         {#each GRANS as g}
-          <button class:on={gran === g} onclick={() => (gran = g)}>{g}</button>
+          <button class:on={effGran === g} onclick={() => (gran = g)}>{g}</button>
         {/each}
       </div>
       <button class="x" onclick={onclose} title="Close">✕</button>
@@ -75,9 +48,14 @@
       <p class="msg">Nothing archived yet. Posts accumulate as you browse (and via backfill).</p>
     {:else}
       <p class="summary">
-        <b>{stats.total.toLocaleString()}</b> posts · {fmt(stats.min)} → {fmt(stats.max)} ·
-        <b>{stats.empties}</b> empty {gran}{stats.empties === 1 ? '' : 's'}
+        <b>{stats.shown.toLocaleString()}</b> posts · {fmt(stats.min)} → {fmt(stats.max)} ·
+        <b>{stats.empties}</b> empty {effGran}{stats.empties === 1 ? '' : 's'}
         <span class="hint">(gaps — periods with nothing captured)</span>
+        {#if stats.hidden > 0}
+          <button class="link" onclick={() => (trim = false)}>· +{stats.hidden} older hidden</button>
+        {:else if !trim && sorted.length}
+          <button class="link" onclick={() => (trim = true)}>· focus recent</button>
+        {/if}
       </p>
       <svg class="hist" viewBox="0 0 {stats.n} 100" preserveAspectRatio="none">
         {#each stats.counts as c, i}
@@ -101,7 +79,9 @@
       <p class="note">
         Bars are archived posts binned by when they were <em>posted</em>. Flat/empty stretches are
         where we captured little or nothing — the gaps Jetstream (or longer backfill) would fill.
-        Peak: {stats.peak} posts/{gran}.
+        Peak: {stats.peak.toLocaleString()} posts/{effGran}.{#if stats.hidden > 0}
+          {' '}({stats.hidden} older post{stats.hidden === 1 ? '' : 's'} — mostly pulled-in context
+          / reposts of old content — trimmed to keep the recent range readable.){/if}
       </p>
     {/if}
   </div>
@@ -171,6 +151,14 @@
   .summary .hint {
     color: var(--text-dim);
     font-size: 0.72rem;
+  }
+  .link {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--accent);
+    font-size: 0.72rem;
+    cursor: pointer;
   }
   .hist {
     width: 100%;
