@@ -411,6 +411,7 @@
             a.py + uy * (a.size / 2),
             b.px - ux * (b.size / 2 + 7),
             b.py - uy * (b.size / 2 + 7),
+            settings.curvedEdges ? 0.24 : 0,
           ),
         }
       })
@@ -790,7 +791,11 @@
   <svg class="annotations" width={w} height={h}>
     {#each topics as a (a.id)}
       {#each a.members as m}
-        <path d={curvePath(a.tx, a.ty, m.x, m.y, 0.18, 40)} fill="none" stroke={a.color} />
+        <path
+          d={curvePath(a.tx, a.ty, m.x, m.y, settings.curvedEdges ? 0.18 : 0, 40)}
+          fill="none"
+          stroke={a.color}
+        />
       {/each}
     {/each}
   </svg>
@@ -934,6 +939,13 @@
           Left: posts hold to the time/engagement axes. Right: connections pull connected posts
           together into clumps.
         </p>
+
+        <div class="row">
+          <span class="label">Curved edges</span>
+          <input type="checkbox" bind:checked={settings.curvedEdges} />
+          <span class="val"></span>
+        </div>
+        <p class="hint">Bow edges so they arc clear of nodes in between; off draws straight lines.</p>
 
         <div class="row">
           <span class="label">Reposts</span>

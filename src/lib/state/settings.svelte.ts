@@ -15,6 +15,7 @@ interface Persisted {
    * `clusterForce`, which is still read once for migration. */
   cohesion: number
   clusterForce?: boolean
+  curvedEdges: boolean
   showReposts: boolean
   followsOnly: boolean
   debugMode: boolean
@@ -43,6 +44,7 @@ class Settings {
   connectReplies = $state(true)
   replyChains = $state(false)
   cohesion = $state(0)
+  curvedEdges = $state(true)
   showReposts = $state(true)
   followsOnly = $state(false)
   debugMode = $state(false)
@@ -60,6 +62,7 @@ class Settings {
     if (typeof p.replyChains === 'boolean') this.replyChains = p.replyChains
     if (typeof p.cohesion === 'number') this.cohesion = Math.max(0, Math.min(1, p.cohesion))
     else if (p.clusterForce === true) this.cohesion = 1 // migrate old boolean
+    if (typeof p.curvedEdges === 'boolean') this.curvedEdges = p.curvedEdges
     if (typeof p.showReposts === 'boolean') this.showReposts = p.showReposts
     if (typeof p.followsOnly === 'boolean') this.followsOnly = p.followsOnly
     if (typeof p.debugMode === 'boolean') this.debugMode = p.debugMode
@@ -76,6 +79,7 @@ class Settings {
             connectReplies: this.connectReplies,
             replyChains: this.replyChains,
             cohesion: this.cohesion,
+            curvedEdges: this.curvedEdges,
             showReposts: this.showReposts,
             followsOnly: this.followsOnly,
             debugMode: this.debugMode,
