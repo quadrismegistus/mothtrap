@@ -321,17 +321,35 @@
     }),
   )
 
-  // What the classifier actually sees. With opsOnly, a reply is represented by
-  // its thread root (the substantive OP), deduped — so sibling replies + their
-  // OP collapse to one clean anchor instead of N noisy "lol yes" lines that the
-  // model tries (badly) to cluster. Replies whose root we haven't fetched fall
-  // back to themselves (their parent text is still inlined by promptLines).
+  // The OP a reply should be represented by: its thread root if we've loaded it,
+  // else the highest ancestor we DO have (climbing parent links), else the post
+  // itself. `ensureThreadRoots` fetches these before a digest so we land on the
+  // real OP rather than falling back to a reply.
+  function anchorOf(it: FeedItem): FeedItem {
+    const root = contextByUri.get(rootUriOf(it))
+    if (root) return root
+    let cur = it
+    const guard = new Set<string>([it.post.uri])
+    for (let i = 0; i < 40; i++) {
+      const p = parentUriOf(cur)
+      if (!p || guard.has(p)) break
+      const parent = contextByUri.get(p)
+      if (!parent) break
+      guard.add(p)
+      cur = parent
+    }
+    return cur
+  }
+
+  // What the classifier actually sees. With opsOnly/label mode, a reply is
+  // represented by its thread OP (see anchorOf), deduped — so sibling replies +
+  // their OP collapse to one clean anchor instead of N noisy "lol yes" lines.
   function classifierInput(items: FeedItem[]): FeedItem[] {
     if (!digest.opsOnly && !digest.labelMode) return items.slice(0, digest.window)
     const seen = new Set<string>()
     const out: FeedItem[] = []
     for (const it of items) {
-      const anchor = contextByUri.get(rootUriOf(it)) ?? it
+      const anchor = anchorOf(it)
       if (seen.has(anchor.post.uri)) continue
       seen.add(anchor.post.uri)
       out.push(anchor)
@@ -347,6 +365,16 @@
     return out.slice(0, digest.window)
   }
 
+  // Fetch the parent chains of the window's replies so opsOnly/label anchoring
+  // lands on the real thread OP (root) rather than falling back to the reply.
+  // Deduped inside ancestors.ensure, so continuous ticks only pay for new ones.
+  async function ensureThreadRoots() {
+    if (!digest.opsOnly && !digest.labelMode) return
+    await ancestors.ensure(
+      feedItems.slice(0, digest.window).filter((i) => parentUriOf(i)).map((i) => i.post.uri),
+    )
+  }
+
   async function summarize() {
     showDigest = true
     // Pull more pages until we have enough posts to fill the digest window (or
@@ -357,6 +385,7 @@
     while (feedItems.length < digest.window && cursor && !loading && guard++ < 12) {
       await load(true)
     }
+    await ensureThreadRoots()
     digest.summarize(classifierInput(feedItems), contextByUri)
   }
 
@@ -711,6 +740,7 @@
         await load(true)
       }
     }
+    await ensureThreadRoots()
     await digest.summarize(classifierInput(feedItems), contextByUri)
   }
   $effect(() => {
