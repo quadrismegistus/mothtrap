@@ -214,7 +214,7 @@
     {:else}
       <label class="field">
         <span>
-          Model
+          {digest.labelMode ? 'Clustering model' : 'Model'}
           {#if digest.ollamaModels.length}
             <span class="model-meta">
               · {digest.ollamaModels.length} installed{digest.ollamaModelPinned ? '' : ' · smallest auto-picked'}
@@ -234,6 +234,21 @@
           {/each}
         </datalist>
       </label>
+      {#if digest.labelMode}
+        <label class="field">
+          <span>
+            Label model
+            <span class="model-meta">· one tiny prompt per post — smaller is fine</span>
+          </span>
+          <input
+            list="ollama-models"
+            value={digest.ollamaLabelModel}
+            oninput={(e) => digest.chooseLabelModel(e.currentTarget.value)}
+            placeholder="defaults to the clustering model"
+            autocomplete="off"
+          />
+        </label>
+      {/if}
       <label class="field">
         <span>Ollama URL</span>
         <input

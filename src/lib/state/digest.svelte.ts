@@ -23,6 +23,11 @@ interface Persisted {
   /** True once the user hand-picks a model — until then we auto-select the
    * smallest installed one. */
   ollamaModelPinned: boolean
+  /** A separate (typically smaller) model for label mode — the per-post label
+   * task is trivial, so a tiny model is ideal there while clustering keeps a
+   * capable one. Empty falls back to `ollamaModel`. */
+  ollamaLabelModel: string
+  ollamaLabelModelPinned: boolean
   ollamaUrl: string
   window: number
   continuous: boolean
@@ -63,6 +68,10 @@ class DigestState {
   /** Set once the user manually chooses a model; before that we keep the
    * ollamaModel synced to the smallest installed one. */
   ollamaModelPinned = $state(false)
+  /** Separate model for label mode (smaller is fine — it just tags one post).
+   * Empty falls back to `ollamaModel`. Auto-synced to smallest until pinned. */
+  ollamaLabelModel = $state('')
+  ollamaLabelModelPinned = $state(false)
   ollamaUrl = $state(DEFAULT_OLLAMA_URL)
   window = $state(DEFAULT_WINDOW)
   /** Continuous mode: maintain a rolling digest via the engine (embed → gate →
@@ -104,6 +113,8 @@ class DigestState {
     if (typeof p.model === 'string') this.model = p.model
     if (typeof p.ollamaModel === 'string') this.ollamaModel = p.ollamaModel
     if (typeof p.ollamaModelPinned === 'boolean') this.ollamaModelPinned = p.ollamaModelPinned
+    if (typeof p.ollamaLabelModel === 'string') this.ollamaLabelModel = p.ollamaLabelModel
+    if (typeof p.ollamaLabelModelPinned === 'boolean') this.ollamaLabelModelPinned = p.ollamaLabelModelPinned
     if (typeof p.ollamaUrl === 'string') this.ollamaUrl = p.ollamaUrl
     if (typeof p.window === 'number' && p.window > 0) this.window = p.window
     if (typeof p.continuous === 'boolean') this.continuous = p.continuous
@@ -119,6 +130,8 @@ class DigestState {
             model: this.model,
             ollamaModel: this.ollamaModel,
             ollamaModelPinned: this.ollamaModelPinned,
+            ollamaLabelModel: this.ollamaLabelModel,
+            ollamaLabelModelPinned: this.ollamaLabelModelPinned,
             ollamaUrl: this.ollamaUrl,
             window: this.window,
             continuous: this.continuous,
@@ -139,17 +152,21 @@ class DigestState {
     const models = await listOllamaModels(this.ollamaUrl)
     this.ollamaModels = models
     if (models.length === 0) return
-    const installed = models.some((m) => m.name === this.ollamaModel)
-    if (!this.ollamaModelPinned || !installed) {
-      const pick = pickDefaultModel(models)
-      if (pick) this.ollamaModel = pick
-    }
+    const pick = pickDefaultModel(models)
+    if (!pick) return
+    const has = (name: string) => models.some((m) => m.name === name)
+    if (!this.ollamaModelPinned || !has(this.ollamaModel)) this.ollamaModel = pick
+    if (!this.ollamaLabelModelPinned || !has(this.ollamaLabelModel)) this.ollamaLabelModel = pick
   }
 
   /** The user explicitly chose a model (typed or picked) — stop auto-selecting. */
   chooseModel(name: string) {
     this.ollamaModel = name
     this.ollamaModelPinned = true
+  }
+  chooseLabelModel(name: string) {
+    this.ollamaLabelModel = name
+    this.ollamaLabelModelPinned = true
   }
 
   #opts(previous?: Digest, postByUri?: Map<string, FeedItem>): SummarizeOpts {
@@ -161,6 +178,14 @@ class DigestState {
       previous,
       postByUri,
     }
+  }
+
+  /** Opts for the per-post label task — same as #opts but with the (usually
+   * smaller) label model on the Ollama path; falls back to the main model. */
+  #labelOpts(): SummarizeOpts {
+    const o = this.#opts()
+    if (this.provider === 'ollama') o.model = this.ollamaLabelModel || this.ollamaModel
+    return o
   }
 
   /** `contextByUri` resolves reply parents so their text is fed to the classifier. */
@@ -204,7 +229,7 @@ class DigestState {
     this.digest = groupByLabel(posts()) // reflect cached labels immediately
     const todo = items.filter((i) => !this.#labels.has(i.post.uri))
     if (todo.length) {
-      await labelFeed(todo, this.#opts(), (uri, label) => {
+      await labelFeed(todo, this.#labelOpts(), (uri, label) => {
         this.#labels.set(uri, label)
         this.digest = groupByLabel(posts()) // fast live grouping while streaming
       })
