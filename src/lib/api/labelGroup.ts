@@ -75,15 +75,20 @@ export function groupByLabel(posts: LabeledPost[]): Digest {
   for (const { uri, label } of posts) {
     if (!label) continue
     const toks = tokens(label)
-    let g = groups.find((grp) => related(grp.toks, toks))
-    if (!g) {
-      g = { toks: new Set(toks), uris: [], labels: new Map() }
-      groups.push(g)
+    // Match against each group's SEED token set (never grown). Growing the
+    // vocabulary turned a group into an absorbing set — a later single-token
+    // label matched any token that had ever entered the group, collapsing
+    // unrelated conversations. An all-stopword label (empty token set) can only
+    // join a group with the identical normalized label.
+    const g = groups.find((grp) =>
+      toks.size ? related(grp.toks, toks) : grp.labels.has(label),
+    )
+    if (g) {
+      if (!g.uris.includes(uri)) g.uris.push(uri)
+      g.labels.set(label, (g.labels.get(label) ?? 0) + 1)
     } else {
-      for (const t of toks) g.toks.add(t) // grow the group's vocabulary
+      groups.push({ toks, uris: [uri], labels: new Map([[label, 1]]) })
     }
-    if (!g.uris.includes(uri)) g.uris.push(uri)
-    g.labels.set(label, (g.labels.get(label) ?? 0) + 1)
   }
 
   const conversations = groups.map((g) => {
@@ -136,7 +141,9 @@ export function groupByEmbedding(
         for (const c of clusters) {
           if (!c.centroid.length) continue
           const s = cosine(v, c.centroid)
-          if (s >= bestSim) {
+          // Strict `>` so ties go to the first-seen cluster — stable across a
+          // streaming rebuild (a `>=` let the last-iterated cluster win).
+          if (s > bestSim) {
             bestSim = s
             best = c
           }

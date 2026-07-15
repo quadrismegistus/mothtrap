@@ -106,4 +106,35 @@ describe('DigestEngine', () => {
     await e.ingest([post('at://ice/1', 'ice one')], OPTS) // same uri → ignored
     expect(embedTexts).toHaveBeenCalledOnce()
   })
+
+  it('re-ingests posts after an LLM failure instead of dropping them', async () => {
+    // First establish throws — the posts must NOT be marked seen, or they'd be
+    // permanently excluded from the digest even though the feed moved on.
+    vi.mocked(summarizeFeed).mockRejectedValueOnce(new Error('ollama down'))
+    const e = new DigestEngine()
+    await e.ingest([post('at://ice/1', 'ice one'), post('at://ice/2', 'ice two')], OPTS)
+    expect(e.phase).toBe('error')
+    expect(e.clusters).toHaveLength(0)
+    // Retry: the same posts are re-embedded and this time establish succeeds.
+    vi.mocked(summarizeFeed).mockResolvedValueOnce({
+      conversations: [{ id: 'ice', label: 'ICE', summary: '', status: 'steady', postUris: ['at://ice/1', 'at://ice/2'] }],
+    })
+    await e.ingest([post('at://ice/1', 'ice one'), post('at://ice/2', 'ice two')], OPTS)
+    expect(e.clusters.map((c) => c.label)).toEqual(['ICE'])
+  })
+
+  it('gives colliding-slug labels distinct cluster ids', async () => {
+    // "AI!" and "AI?" both slug to "ai" — the ids must not collide (breaks keyed
+    // {#each}). Both are ICE-topic vectors here; distinct labels, same slug.
+    vi.mocked(summarizeFeed).mockResolvedValue({
+      conversations: [
+        { id: 'ai', label: 'AI!', summary: '', status: 'steady', postUris: ['at://ice/1'] },
+        { id: 'ai', label: 'AI?', summary: '', status: 'steady', postUris: ['at://ice/2'] },
+      ],
+    })
+    const e = new DigestEngine()
+    await e.ingest([post('at://ice/1', 'ice one'), post('at://ice/2', 'ice two')], OPTS)
+    const ids = e.clusters.map((c) => c.id)
+    expect(new Set(ids).size).toBe(ids.length) // all unique
+  })
 })

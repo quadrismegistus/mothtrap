@@ -36,6 +36,24 @@ describe('groupByLabel', () => {
     expect(d.conversations).toHaveLength(2)
   })
 
+  it('does not over-merge via an absorbing group vocabulary', () => {
+    // "Trump tariffs" + "Trump Gaza aid" chain a group to {trump, tariff, gaza,
+    // aid} if the vocabulary grows; a later "Gaza" must NOT then join the Trump
+    // group. Groups match against their SEED tokens only.
+    const d = groupByLabel([
+      { uri: 'a', label: 'Trump tariffs' },
+      { uri: 'b', label: 'Trump tariff hike' },
+      { uri: 'c', label: 'Gaza ceasefire' },
+      { uri: 'd', label: 'Gaza' },
+    ])
+    const trump = d.conversations.find((c) => c.postUris.includes('a'))!
+    expect(trump.postUris).not.toContain('c')
+    expect(trump.postUris).not.toContain('d')
+    // "Gaza" joins the Gaza-ceasefire group (subset), not the Trump one.
+    const gaza = d.conversations.find((c) => c.postUris.includes('c'))!
+    expect(gaza.postUris.sort()).toEqual(['c', 'd'])
+  })
+
   it('keeps singletons as one-post conversations', () => {
     const d = groupByLabel([{ uri: 'a', label: 'A lone thought' }])
     expect(d.conversations).toHaveLength(1)

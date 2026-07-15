@@ -388,13 +388,48 @@
   // Click a pill → reveal (or re-hide) ALL its member posts, even the ones the
   // node budget dropped, and pin the pill in place while revealed so it doesn't
   // drift as its posts flow in. Drag still repositions it.
-  function toggleReveal(sid: string, convoId: string) {
+  // uris a reveal added to `expanded` (to un-collapse a thread), so un-reveal can
+  // remove exactly those without disturbing threads the user mapped by hand.
+  const revealExpanded = new Map<string, string[]>()
+  async function toggleReveal(sid: string, convoId: string) {
     if (revealedTopics.has(convoId)) {
       revealedTopics.delete(convoId)
       pinned.delete(sid)
-    } else {
-      revealedTopics.add(convoId)
-      pinned.add(sid)
+      for (const u of revealExpanded.get(convoId) ?? []) expanded.delete(u)
+      revealExpanded.delete(convoId)
+      return
+    }
+    revealedTopics.add(convoId)
+    pinned.add(sid)
+    // Make good on the pill's count: members that aren't currently nodes are
+    // either collapsed inside a thread (un-collapse them) or off the loaded
+    // window (revive from the engine/archive), mirroring focusPost.
+    const pill = topicMembership.find((m) => m.id === convoId)
+    if (!pill) return
+    const graphUris = new Set(graph.nodes.map((n) => n.uri))
+    const added: string[] = []
+    const toRevive: string[] = []
+    for (const u of pill.uris) {
+      if (graphUris.has(u)) continue // already a node → revealedUris shows it
+      if (allItems.some((i) => i.post.uri === u)) {
+        if (!expanded.has(u)) {
+          expanded.add(u)
+          added.push(u)
+        }
+      } else {
+        toRevive.push(u)
+      }
+    }
+    revealExpanded.set(convoId, added)
+    if (toRevive.length) {
+      const fromArchive = await archive.getPosts(toRevive).catch(() => new Map<string, FeedItem>())
+      const add: FeedItem[] = []
+      const have = new Set(revived.map((r) => r.post.uri))
+      for (const u of toRevive) {
+        const item = digest.engine.getItem(u) ?? fromArchive.get(u)
+        if (item && !have.has(u)) add.push(item)
+      }
+      if (add.length) revived = [...revived, ...add]
     }
   }
   function onTopicPointerDown(e: PointerEvent, sid: string, convoId: string) {
@@ -749,6 +784,7 @@
     }
     read.dismissMany([...all])
     revealedTopics.delete(convoId)
+    pinned.delete(`topic:${convoId}`) // mirror toggleReveal's pin so it doesn't leak
     if (hovered && all.has(hovered)) hovered = null
   }
 

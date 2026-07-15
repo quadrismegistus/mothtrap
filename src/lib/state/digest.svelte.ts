@@ -176,8 +176,27 @@ class DigestState {
         this.#labels.set(uri, label)
         this.digest = groupByLabel(posts()) // fast live grouping while streaming
       })
+      // Record an ATTEMPT for every post we tried, even ones the model gave no
+      // usable label for — otherwise `todo` re-sends them to the model on every
+      // continuous tick forever. Empty-labeled posts are dropped from grouping
+      // but not re-requested.
+      for (const it of todo) if (!this.#labels.has(it.post.uri)) this.#labels.set(it.post.uri, '')
     }
+    this.#capCaches()
     await this.#embedRegroup(posts().filter((p) => p.label))
+  }
+
+  /** Bound the label/vector caches so a long continuous session can't grow them
+   * without limit. Oldest entries (Map insertion order) are evicted first. */
+  #capCaches() {
+    const cap = (m: Map<string, unknown>, max: number) => {
+      for (const k of m.keys()) {
+        if (m.size <= max) break
+        m.delete(k)
+      }
+    }
+    cap(this.#labels, 5000)
+    cap(this.#labelVecs, 2000)
   }
 
   /** Embed any not-yet-embedded labels (cached), then group by cosine. Falls

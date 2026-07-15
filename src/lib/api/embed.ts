@@ -31,13 +31,22 @@ export function cosine(a: number[], b: number[]): number {
   return s
 }
 
-/** Mean of unit vectors, re-normalized — a cluster centroid. */
+/** Mean of unit vectors, re-normalized — a cluster centroid. Vectors whose
+ * dimension doesn't match the first (a stale vector from a different embed
+ * model, or a demo/real mix) are skipped rather than poisoning the mean with
+ * NaN. */
 export function centroid(vectors: number[][]): number[] {
   if (vectors.length === 0) return []
   const d = vectors[0].length
   const c = new Array(d).fill(0)
-  for (const v of vectors) for (let k = 0; k < d; k++) c[k] += v[k]
-  for (let k = 0; k < d; k++) c[k] /= vectors.length
+  let n = 0
+  for (const v of vectors) {
+    if (v.length !== d) continue
+    for (let k = 0; k < d; k++) c[k] += v[k]
+    n++
+  }
+  if (n === 0) return []
+  for (let k = 0; k < d; k++) c[k] /= n
   return norm(c)
 }
 
@@ -75,7 +84,17 @@ export async function embedTexts(texts: string[], opts: EmbedOpts = {}): Promise
     throw new Error(`Ollama embed ${res.status}: ${detail.slice(0, 160) || res.statusText}`)
   }
   const data = (await res.json()) as { embeddings?: number[][] }
-  return (data.embeddings ?? []).map(norm)
+  const out = (data.embeddings ?? []).map(norm)
+  // A 200 with a missing/short embeddings array (wrong or unpulled model) must
+  // NOT pass silently — callers rely on 1:1 alignment with `texts`, and a
+  // partial result would misalign vectors or wipe out grouping. Fail loudly so
+  // the caller's fallback (e.g. token grouping) can take over.
+  if (out.length !== texts.length) {
+    throw new Error(
+      `Ollama embed returned ${out.length} vectors for ${texts.length} inputs (is "${opts.model || DEFAULT_EMBED_MODEL}" pulled?).`,
+    )
+  }
+  return out
 }
 
 /**

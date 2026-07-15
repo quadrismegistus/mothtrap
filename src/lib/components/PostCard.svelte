@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
   import type { FeedItem } from '../api/timeline'
   import {
     authorName,
@@ -77,6 +78,12 @@
     clearTimeout(rtHoverTimer)
     rtHoverTimer = setTimeout(() => (showRtProfile = false), 160)
   }
+  // Cards mount/unmount constantly as the graph re-lays-out; don't let a pending
+  // close-timer fire (and touch $state) on a torn-down component.
+  onDestroy(() => {
+    clearTimeout(hoverTimer)
+    clearTimeout(rtHoverTimer)
+  })
   function toggleReposter() {
     if (!rt || !rt.did) return
     follows.toggle(rt)

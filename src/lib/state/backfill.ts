@@ -64,7 +64,9 @@ export async function backfill(mountTime: number, opts: BackfillOpts = {}): Prom
 
     const uris = page.items.map((i) => i.post.uri)
     const known = await archive.countKnownBefore(uris, mountTime)
-    await archive.record(page.items)
+    // One bad post (e.g. an un-cloneable field → the whole tx rejects) must not
+    // halt the entire backfill — skip this page's write and keep paging.
+    await archive.record(page.items).catch(() => {})
 
     result.pages++
     result.imported += uris.length - known

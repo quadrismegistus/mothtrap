@@ -169,22 +169,12 @@ Return ONLY this JSON object, no prose:
  * prose. We strip fences, find the first `{` or `[`, and balance-scan (respecting
  * strings/escapes) to its matching close, ignoring anything after.
  */
-export function extractJson(text: string): unknown {
-  let t = text.trim()
-  const fence = t.match(/^```[a-z]*\n?/i)
-  if (fence) {
-    t = t.slice(fence[0].length)
-    const close = t.lastIndexOf('```')
-    if (close !== -1) t = t.slice(0, close)
-    t = t.trim()
-  }
-  const opens = [t.indexOf('{'), t.indexOf('[')].filter((i) => i >= 0)
-  if (opens.length === 0) throw new Error('No JSON in model response')
-  const start = Math.min(...opens)
+/** Index of the bracket matching the one at `start`, respecting strings/escapes;
+ * -1 if it never closes (truncated). */
+function matchClose(t: string, start: number): number {
   let depth = 0
   let inStr = false
   let esc = false
-  let endIdx = -1
   for (let i = start; i < t.length; i++) {
     const ch = t[i]
     if (inStr) {
@@ -194,21 +184,48 @@ export function extractJson(text: string): unknown {
     } else if (ch === '"') inStr = true
     else if (ch === '{' || ch === '[') depth++
     else if (ch === '}' || ch === ']') {
-      if (--depth === 0) {
-        endIdx = i
-        break
-      }
+      if (--depth === 0) return i
     }
   }
-  // Opened but never closed → the response was cut off (max_tokens / a stall).
-  if (endIdx === -1) {
+  return -1
+}
+
+export function extractJson(text: string): unknown {
+  let t = text.trim()
+  const fence = t.match(/^```[a-z]*\n?/i)
+  if (fence) {
+    t = t.slice(fence[0].length)
+    const close = t.lastIndexOf('```')
+    if (close !== -1) t = t.slice(0, close)
+    t = t.trim()
+  }
+  // Every `{`/`[` is a candidate start — the real JSON may follow prose that
+  // itself contains braces (`Sure, {here}: {"clusters":…}`), so we can't just
+  // lock onto the first bracket. Try each candidate in order; return the first
+  // that balance-closes AND parses. Capped so pathological input can't go O(n²).
+  const starts: number[] = []
+  for (let i = 0; i < t.length && starts.length < 64; i++) {
+    if (t[i] === '{' || t[i] === '[') starts.push(i)
+  }
+  if (starts.length === 0) throw new Error('No JSON in model response')
+  let sawTruncation = false
+  for (const start of starts) {
+    const end = matchClose(t, start)
+    if (end === -1) {
+      sawTruncation = true
+      continue
+    }
+    try {
+      return JSON.parse(t.slice(start, end + 1))
+    } catch {
+      // Not this fragment — try the next candidate bracket.
+    }
+  }
+  // A candidate opened but never closed → the response was cut off.
+  if (sawTruncation) {
     throw new Error('Model response was cut off before valid JSON (try a smaller feed or a larger model).')
   }
-  try {
-    return JSON.parse(t.slice(start, endIdx + 1))
-  } catch {
-    throw new Error('Model response was not valid JSON.')
-  }
+  throw new Error('Model response was not valid JSON.')
 }
 
 function slug(label: string): string {

@@ -1,6 +1,30 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { summarizeFeed, exemplars, contextFor, type Conversation } from './llm'
+import { summarizeFeed, exemplars, contextFor, extractJson, type Conversation } from './llm'
 import { mkPost } from '../testing'
+
+describe('extractJson', () => {
+  it('parses clean JSON', () => {
+    expect(extractJson('{"clusters":[]}')).toEqual({ clusters: [] })
+  })
+  it('strips a ```json fence', () => {
+    expect(extractJson('```json\n{"a":1}\n```')).toEqual({ a: 1 })
+  })
+  it('skips prose braces and finds the real JSON that follows', () => {
+    // The first `{` is prose; the real object comes later — must not fail on it.
+    expect(extractJson('Sure, {here} is the breakdown: {"clusters":[1,2]}')).toEqual({
+      clusters: [1, 2],
+    })
+  })
+  it('accepts a bare array (soft-schema MLX drops the wrapper)', () => {
+    expect(extractJson('[{"label":"x"}]')).toEqual([{ label: 'x' }])
+  })
+  it('reports truncation when a bracket never closes', () => {
+    expect(() => extractJson('{"clusters":[{"label":"x"')).toThrow(/cut off/)
+  })
+  it('throws when there is no JSON at all', () => {
+    expect(() => extractJson('no json here')).toThrow(/No JSON/)
+  })
+})
 
 function apiResponse(payload: unknown) {
   return {

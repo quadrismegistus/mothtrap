@@ -95,15 +95,28 @@ export class DigestEngine {
       summary: c.summary,
       status: (c.status as ConvoStatus) ?? 'steady',
       uris: c.uris,
-      centroid: this.#centroidOf(c.uris),
+      // Prefer the centroid stored with the cluster; only recompute from the
+      // vectors store for older digests that predate the stored centroid.
+      centroid: c.centroid?.length ? c.centroid : this.#centroidOf(c.uris),
     }))
   }
 
   #persist() {
     // Snapshot out of $state — IndexedDB can't structured-clone a Svelte proxy.
-    const plain = $state.snapshot(this.clusters) as { id: string; label: string; summary: string; status: string; uris: string[] }[]
+    const plain = $state.snapshot(this.clusters) as {
+      id: string; label: string; summary: string; status: string; uris: string[]; centroid: number[]
+    }[]
     void archive
-      .putDigest(plain.map((c) => ({ id: c.id, label: c.label, summary: c.summary, status: c.status, uris: c.uris })))
+      .putDigest(
+        plain.map((c) => ({
+          id: c.id,
+          label: c.label,
+          summary: c.summary,
+          status: c.status,
+          uris: c.uris,
+          centroid: c.centroid, // persisted with the cluster, not the separate vectors store
+        })),
+      )
       .catch(() => {})
   }
 
@@ -133,6 +146,18 @@ export class DigestEngine {
     this.error = undefined
     this.lastGate = undefined
     void archive.putDigest([]).catch(() => {})
+  }
+
+  /** A cluster id unique within `taken` (mutated) — two labels that slug the
+   * same ("AI!" and "AI?" → "ai") would otherwise collide and break Svelte's
+   * keyed {#each} and id-keyed lookups. */
+  #uniqueId(base: string, taken: Set<string>): string {
+    const b = base || 'c'
+    let id = b
+    let n = 2
+    while (taken.has(id)) id = `${b}-${n++}`
+    taken.add(id)
+    return id
   }
 
   #centroidOf(uris: string[]): number[] {
@@ -170,8 +195,11 @@ export class DigestEngine {
         fresh.map(textOf),
         { ollamaUrl: opts.ollamaUrl },
       )
+      // Cache vectors up front (needed to compute centroids), but DON'T mark the
+      // posts as seen yet — that happens only after a path below succeeds, so a
+      // failing LLM call leaves them to be re-ingested rather than silently
+      // dropped.
       fresh.forEach((it, k) => {
-        this.#item.set(it.post.uri, it)
         if (vecs[k]) this.#vec.set(it.post.uri, vecs[k])
       })
       // Cache the fresh vectors so a reload doesn't re-embed the whole feed.
@@ -195,6 +223,8 @@ export class DigestEngine {
         this.bufferedCount = this.#buffer.length
         this.phase = 'skipped'
       }
+      // A path succeeded — NOW mark these seen so they're not re-processed.
+      for (const it of fresh) this.#item.set(it.post.uri, it)
     } catch (err) {
       this.phase = 'error'
       this.error = err instanceof Error ? err.message : 'Digest engine failed'
@@ -212,8 +242,9 @@ export class DigestEngine {
   async #establish(items: FeedItem[], opts: SummarizeOpts) {
     this.phase = 'establishing'
     const d = await summarizeFeed(items, opts, (t) => (this.streamText = t))
+    const taken = new Set<string>()
     this.clusters = d.conversations.map((c) => ({
-      id: c.id,
+      id: this.#uniqueId(c.id, taken),
       label: c.label,
       summary: c.summary,
       status: c.status,
@@ -233,6 +264,7 @@ export class DigestEngine {
       opts,
       (t) => (this.streamText = t),
     )
+    const taken = new Set(this.clusters.map((c) => c.id))
     for (const u of updates) {
       const match = this.clusters.find((c) => c.label.toLowerCase() === u.label.toLowerCase())
       if (match) {
@@ -255,7 +287,7 @@ export class DigestEngine {
         this.#addUris(best, u.uris)
       } else {
         this.clusters.push({
-          id: slug(u.label),
+          id: this.#uniqueId(slug(u.label), taken),
           label: u.label,
           summary: '',
           status: statusOf(this.#itemsOf(u.uris)),

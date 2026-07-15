@@ -55,6 +55,11 @@ export interface PersistedCluster {
   summary: string
   status: string
   uris: string[]
+  /** The cluster's centroid, stored ALONGSIDE the cluster (same put) so a reload
+   * never depends on the separate vectors store having landed — otherwise a
+   * cluster could rehydrate with an empty centroid and silently break the gate/
+   * dedup. Optional for digests persisted before this field existed. */
+  centroid?: number[]
 }
 interface DigestStateRow {
   id: 'current'
@@ -162,15 +167,32 @@ export class Archive {
       }
     }
     await tx.done
+    this.#capMemory()
   }
 
-  /** Record a follows snapshot if it differs from the most recent one. */
+  /** Bound the write-dedup caches so a long continuous session can't grow them
+   * without limit. Eviction just risks an occasional duplicate row later (the
+   * stores tolerate it), never data loss. */
+  #capMemory() {
+    const trim = (c: { size: number; keys(): IterableIterator<string>; delete(k: string): unknown }, max: number) => {
+      if (c.size <= max) return
+      for (const k of [...c.keys()]) {
+        if (c.size <= max) break
+        c.delete(k)
+      }
+    }
+    trim(this.#seenAppearance, 50_000)
+    trim(this.#lastCounts, 50_000)
+  }
+
+  /** Record a follows snapshot if it differs from the most recent one. Reads
+   * only the newest row (cursor) rather than loading the whole history. */
   async recordFollows(dids: string[]): Promise<void> {
     const db = this.#db
     if (!db || dids.length === 0) return
     const sorted = [...new Set(dids)].sort()
-    const all = await db.getAll('follows')
-    const last = all[all.length - 1]
+    const cursor = await db.transaction('follows').store.openCursor(null, 'prev')
+    const last = cursor?.value
     if (last && last.dids.length === sorted.length && last.dids.every((d, i) => d === sorted[i])) return
     await db.add('follows', { t: Date.now(), dids: sorted })
   }
