@@ -30,13 +30,25 @@ export interface CoverageBins {
   gran: Gran
 }
 
+/** Bin a sorted-ascending array into `n` bins from `binStart` step `bucket`. */
+function binInto(sorted: number[], binStart: number, bucket: number, n: number): number[] {
+  const counts = new Array(n).fill(0)
+  for (const t of sorted) {
+    const i = Math.floor((t - binStart) / bucket)
+    if (i >= 0 && i < n) counts[i]++
+  }
+  return counts
+}
+
 /**
- * Bin post timestamps into a coverage histogram. When `trim` is on, ancient
- * outliers (pulled-in context / reposts of old content — a few posts stretching
- * the axis across years) are dropped: find the largest time gap, and if the
- * chunk before it is a small fraction (<10%) and the gap is big (>30d), cut it.
- * `granOverride` forces a granularity; otherwise it's auto from the (trimmed)
- * span. Input need not be sorted.
+ * Bin post timestamps into a coverage histogram. When `trim` is on, the sparse
+ * LEADING tail (old posts pulled in as context / reposts of old content, which
+ * would otherwise stretch the axis across years) is dropped by DENSITY, not by a
+ * single gap: bin the full range coarsely, find the first bin whose volume is a
+ * meaningful fraction of the peak, and start there. Middle gaps are preserved —
+ * those are real coverage gaps, the whole point of the view. `granOverride`
+ * forces the display granularity; otherwise it's auto from the (trimmed) span.
+ * Input need not be sorted.
  */
 export function coverageBins(
   times: number[],
@@ -46,22 +58,29 @@ export function coverageBins(
   const sorted = times.filter((t) => t > 0).sort((a, b) => a - b)
   if (sorted.length === 0) return null
 
-  let start = sorted[0]
+  const min = sorted[0]
   const end = sorted[sorted.length - 1]
+  let start = min
   let hidden = 0
-  if (trim && sorted.length > 1) {
-    let gapAt = -1
-    let gapSize = 0
-    for (let i = 0; i < sorted.length - 1; i++) {
-      const g = sorted[i + 1] - sorted[i]
-      if (g > gapSize) {
-        gapSize = g
-        gapAt = i
+  if (trim && sorted.length > 20 && end > min) {
+    // Detect at a coarse granularity over the FULL span, independent of the
+    // display granularity.
+    const dg = BUCKET_MS[autoGran(end - min)]
+    const dStart = Math.floor(min / dg) * dg
+    const dn = Math.min(Math.floor((end - dStart) / dg) + 1, 8000)
+    const dc = binInto(sorted, dStart, dg, dn)
+    let peak = 1
+    for (const c of dc) if (c > peak) peak = c
+    const thresh = Math.max(peak * 0.05, 2) // "substantial" = ≥5% of the peak bin
+    const first = dc.findIndex((c) => c >= thresh)
+    if (first > 0) {
+      const cut = dStart + first * dg
+      // Start at the first real post in/after that bin, so the axis hugs the data.
+      const s = sorted.find((t) => t >= cut)
+      if (s !== undefined) {
+        start = s
+        hidden = sorted.filter((t) => t < start).length
       }
-    }
-    if (gapAt >= 0 && gapSize > 30 * DAY && gapAt + 1 < sorted.length * 0.1) {
-      start = sorted[gapAt + 1]
-      hidden = gapAt + 1
     }
   }
 

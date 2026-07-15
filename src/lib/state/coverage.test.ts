@@ -16,6 +16,16 @@ describe('coverageBins', () => {
     expect(b.min).toBeGreaterThan(NOW - 10 * DAY) // starts at the recent bulk
   })
 
+  it('trims a SCATTERED old tail with no single gap (the real failing case)', () => {
+    // ~24 old posts, ~1/month over 2 years (no dominant gap the old heuristic
+    // could find), then a dense recent bulk. Density-based trim handles it.
+    const old = Array.from({ length: 24 }, (_, i) => NOW - (24 - i) * 30 * DAY)
+    const recent = Array.from({ length: 500 }, (_, i) => NOW - i * 3_600_000) // last ~3 weeks
+    const b = coverageBins([...old, ...recent], null, true)!
+    expect(b.hidden).toBeGreaterThanOrEqual(20) // the scattered old tail is dropped
+    expect(b.min).toBeGreaterThan(NOW - 40 * DAY) // axis hugs the recent bulk, not 2y ago
+  })
+
   it('does NOT trim when the old chunk is a large fraction', () => {
     const oldChunk = Array.from({ length: 50 }, (_, i) => NOW - 400 * DAY - i * DAY)
     const recent = Array.from({ length: 50 }, (_, i) => NOW - i * DAY)
