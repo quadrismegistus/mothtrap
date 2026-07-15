@@ -319,6 +319,16 @@ test('hovering a card avatar opens a profile preview', async ({ page }) => {
   await expect(page.locator('.profile-hover .ph-stats')).toContainText('followers')
 })
 
+test('hovering the reposter name opens a profile preview', async ({ page }) => {
+  await graphReady(page)
+  const rep = page.locator('.wrap:has(.reposter)').first()
+  await rep.hover()
+  await page.locator('.card').waitFor()
+  await page.locator('.card').hover()
+  await page.locator('.rt-name').first().hover()
+  await expect(page.locator('.rt-name .profile-hover')).toBeVisible()
+})
+
 test('a mutual is marked "follows you" on its card', async ({ page }) => {
   await graphReady(page)
   const wraps = await page.locator('.wrap').all()

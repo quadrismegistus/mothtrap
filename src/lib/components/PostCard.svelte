@@ -59,6 +59,24 @@
 
   const rt = $derived(reposterProfile(item))
   const rtFollowing = $derived(rt && rt.did ? follows.following(rt) : false)
+  // Reposter shaped like a post author, so the same profile preview works.
+  const rtAuthor = $derived(
+    rt && rt.did
+      ? { did: rt.did, handle: rt.handle, displayName: rt.name, avatar: rt.avatar, viewer: rt.viewer }
+      : null,
+  )
+  let showRtProfile = $state(false)
+  let rtHoverTimer: ReturnType<typeof setTimeout> | undefined
+  function enterRt() {
+    if (!rtAuthor) return
+    clearTimeout(rtHoverTimer)
+    profiles.ensure(rtAuthor.did)
+    showRtProfile = true
+  }
+  function leaveRt() {
+    clearTimeout(rtHoverTimer)
+    rtHoverTimer = setTimeout(() => (showRtProfile = false), 160)
+  }
   function toggleReposter() {
     if (!rt || !rt.did) return
     follows.toggle(rt)
@@ -120,7 +138,20 @@
 >
   {#if rt}
     <div class="repost">
-      🔁 reposted by {rt.name}
+      🔁 reposted by
+      {#if rtAuthor}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <span class="rt-name" onmouseenter={enterRt} onmouseleave={leaveRt}>
+          {rt.name}
+          {#if showRtProfile}
+            <div class="profile-pop" onmouseenter={enterRt} onmouseleave={leaveRt} role="tooltip">
+              <ProfileHover author={rtAuthor} />
+            </div>
+          {/if}
+        </span>
+      {:else}
+        {rt.name}
+      {/if}
       {#if rt.did && rt.did !== session.did}
         <button class="rt-follow" onclick={toggleReposter}>
           {rtFollowing ? 'unfollow' : 'follow'}
@@ -311,6 +342,13 @@
     font-size: 0.72rem;
     color: var(--text-dim);
     margin-bottom: 0.45rem;
+  }
+  .rt-name {
+    position: relative;
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 2px;
   }
   /* Reposter follow/unfollow: deliberately small and muted — a pruning tool,
    * not a call to action. */
