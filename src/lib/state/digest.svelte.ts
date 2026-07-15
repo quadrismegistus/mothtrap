@@ -185,8 +185,8 @@ class DigestState {
 
   /** Opts for the per-post label task — same as #opts but with the (usually
    * smaller) label model on the Ollama path; falls back to the main model. */
-  #labelOpts(): SummarizeOpts {
-    const o = this.#opts()
+  #labelOpts(postByUri?: Map<string, FeedItem>): SummarizeOpts {
+    const o = this.#opts(undefined, postByUri)
     if (this.provider === 'ollama') o.model = this.ollamaLabelModel || this.ollamaModel
     return o
   }
@@ -199,7 +199,7 @@ class DigestState {
     this.streamText = ''
     try {
       if (this.labelMode) {
-        await this.#labelIngest(items)
+        await this.#labelIngest(items, contextByUri)
       } else if (this.continuous) {
         // Rolling engine: embed → gate → establish/roll/skip. It maintains its
         // own clusters across calls; we surface them as the digest.
@@ -225,14 +225,14 @@ class DigestState {
    * pass re-groups more accurately (merging topics that share no literal word).
    * The digest is rebuilt over the CURRENT window so posts that scrolled off
    * drop out. */
-  async #labelIngest(items: FeedItem[]) {
+  async #labelIngest(items: FeedItem[], contextByUri?: Map<string, FeedItem>) {
     this.#lastLabelItems = items
     const posts = () =>
       items.map((i) => ({ uri: i.post.uri, label: this.#labels.get(i.post.uri) ?? '' }))
     this.digest = groupByLabel(posts()) // reflect cached labels immediately
     const todo = items.filter((i) => !this.#labels.has(i.post.uri))
     if (todo.length) {
-      await labelFeed(todo, this.#labelOpts(), (uri, label) => {
+      await labelFeed(todo, this.#labelOpts(contextByUri), (uri, label) => {
         this.#labels.set(uri, label)
         this.digest = groupByLabel(posts()) // fast live grouping while streaming
       })

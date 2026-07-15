@@ -410,21 +410,25 @@
     // window (revive from the engine/archive), mirroring focusPost.
     const pill = topicMembership.find((m) => m.id === convoId)
     if (!pill) return
-    const graphUris = new Set(graph.nodes.map((n) => n.uri))
+    const loaded = new Set(allItems.map((i) => i.post.uri))
     const added: string[] = []
     const toRevive: string[] = []
     for (const u of pill.uris) {
-      if (graphUris.has(u)) continue // already a node → revealedUris shows it
-      if (allItems.some((i) => i.post.uri === u)) {
-        if (!expanded.has(u)) {
-          expanded.add(u)
-          added.push(u)
-        }
-      } else {
-        toRevive.push(u)
+      if (!loaded.has(u)) {
+        toRevive.push(u) // off the loaded window → revive below
+        continue
+      }
+      // Un-collapse the member's thread so a reply shows CONNECTED to its parent
+      // chain (buildGraph caps a shown thread, so this can't explode).
+      if (!expanded.has(u)) {
+        expanded.add(u)
+        added.push(u)
       }
     }
     revealExpanded.set(convoId, added)
+    // Fetch the parent chain of any reply members we don't have yet (no-op for
+    // non-replies) so the un-collapsed thread actually has parents to show.
+    ancestors.ensure(pill.uris)
     if (toRevive.length) {
       const fromArchive = await archive.getPosts(toRevive).catch(() => new Map<string, FeedItem>())
       const add: FeedItem[] = []
