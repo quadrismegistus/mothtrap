@@ -362,7 +362,7 @@ test('merge slider re-groups labels without re-labeling', async ({ page }) => {
   expect(after).toBeGreaterThanOrEqual(before)
 })
 
-test('double-clicking a topic pill reveals all its posts', async ({ page }) => {
+test('clicking a topic pill reveals all its posts', async ({ page }) => {
   await graphReady(page)
   await page.locator('.digest-btn').click()
   await page.locator('.toggle', { hasText: 'Label each post' }).locator('input').check()
@@ -370,12 +370,12 @@ test('double-clicking a topic pill reveals all its posts', async ({ page }) => {
   const pill = page.locator('.topic-node').first()
   await pill.waitFor({ timeout: 8000 })
   const before = await page.locator('button.node').count()
-  await pill.dblclick()
+  await pill.click()
   await expect(pill).toHaveClass(/revealed/)
   // Its off-budget members come in, so the node count doesn't drop.
   expect(await page.locator('button.node').count()).toBeGreaterThanOrEqual(before)
-  // Double-clicking again collapses the reveal.
-  await pill.dblclick()
+  // Clicking again collapses the reveal.
+  await pill.click()
   await expect(pill).not.toHaveClass(/revealed/)
 })
 

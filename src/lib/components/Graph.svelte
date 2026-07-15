@@ -138,12 +138,14 @@
   // Which nodes to show (top/recent/mix), plus pinned nodes and — when "connect
   // replies" is on — the present ancestor chain of each shown node, so a reply is
   // drawn connected to the post it replies to. Layout is computed over this set.
-  // Member uris of every topic the user revealed (double-clicked its pill).
+  // Member uris of every topic the user revealed (clicked its pill) — taken from
+  // the pill's own (exclusive) membership so the pill's count and what it pulls
+  // in agree.
   const revealedUris = $derived.by(() => {
     const s = new Set<string>()
     if (!revealedTopics.size) return s
-    for (const c of digest.digest?.conversations ?? []) {
-      if (revealedTopics.has(c.id)) for (const u of c.postUris) s.add(u)
+    for (const m of topicMembership) {
+      if (revealedTopics.has(m.id)) for (const u of m.uris) s.add(u)
     }
     return s
   })
@@ -383,13 +385,18 @@
     if (pinned.has(id)) pinned.delete(id)
     else pinned.add(id)
   }
-  // Double-click a pill → reveal (or re-hide) ALL its member posts, even the
-  // ones the node budget dropped. The whole conversation comes into view.
-  function toggleReveal(convoId: string) {
-    if (revealedTopics.has(convoId)) revealedTopics.delete(convoId)
-    else revealedTopics.add(convoId)
+  // Click a pill → reveal (or re-hide) ALL its member posts, even the ones the
+  // node budget dropped, and pin the pill in place while revealed so it doesn't
+  // drift as its posts flow in. Drag still repositions it.
+  function toggleReveal(sid: string, convoId: string) {
+    if (revealedTopics.has(convoId)) {
+      revealedTopics.delete(convoId)
+      pinned.delete(sid)
+    } else {
+      revealedTopics.add(convoId)
+      pinned.add(sid)
+    }
   }
-  let lastTopicClick = { id: '', t: 0 }
   function onTopicPointerDown(e: PointerEvent, sid: string, convoId: string) {
     e.preventDefault()
     const sx = e.clientX
@@ -404,20 +411,8 @@
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
       window.removeEventListener('pointercancel', up)
-      if (moved) {
-        onNodeDragEnd(sid)
-        return
-      }
-      // Distinguish a double-click (reveal all posts) from a single click (pin).
-      const now = Date.now()
-      if (lastTopicClick.id === sid && now - lastTopicClick.t < 320) {
-        togglePinUri(sid) // undo the first click's pin toggle
-        toggleReveal(convoId)
-        lastTopicClick = { id: '', t: 0 }
-      } else {
-        togglePinUri(sid)
-        lastTopicClick = { id: sid, t: now }
-      }
+      if (moved) onNodeDragEnd(sid)
+      else toggleReveal(sid, convoId)
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
@@ -894,12 +889,12 @@
       class:pinned={pinned.has(a.sid)}
       class:revealed={revealedTopics.has(a.id)}
       style="left: {a.tx}px; top: {a.ty}px; --c: {a.color}"
-      title="Drag to pull its posts together · click to pin · double-click to reveal all its posts · D to dismiss the whole conversation"
+      title="Click to reveal all {a.uris.length} posts · drag to move · D to dismiss the whole conversation"
       onmouseenter={() => (hoveredTopic = a.id)}
       onmouseleave={() => (hoveredTopic = null)}
       onpointerdown={(e) => onTopicPointerDown(e, a.sid, a.id)}
     >
-      {a.label}
+      {a.label}<span class="topic-count">{a.uris.length}</span>
     </button>
   {/each}
 
@@ -1151,6 +1146,16 @@
   .topic-node.revealed {
     background: color-mix(in srgb, var(--c) 30%, var(--bg-elev));
     color: var(--text);
+  }
+  .topic-count {
+    display: inline-block;
+    margin-left: 0.35rem;
+    padding: 0 0.3rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--c) 35%, transparent);
+    font-size: 0.62rem;
+    font-variant-numeric: tabular-nums;
+    vertical-align: baseline;
   }
   .edges path {
     fill: none;
