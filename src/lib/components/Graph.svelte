@@ -21,6 +21,7 @@
   import { follows } from '../state/follows.svelte'
   import { session } from '../state/session.svelte'
   import { archive } from '../state/archive'
+  import { corpus } from '../state/corpus.svelte'
   import CoverageView from './CoverageView.svelte'
   import { backfill, type BackfillResult } from '../state/backfill'
   import { getFollowDids } from '../api/actors'
@@ -72,7 +73,7 @@
       // Snapshot out of $state — the derived feedItems are reactive proxies,
       // which IndexedDB can't structured-clone (the raw poll path stores plain
       // fetch results, so it's unaffected).
-      void archive.record($state.snapshot(feedItems) as FeedItem[])
+      void corpus.record($state.snapshot(feedItems) as FeedItem[])
     }
   })
   // Provenance-complete corpus (archive-first, PLAN §8 phase 2 step 1): pulled-in
@@ -89,7 +90,7 @@
     const fresh = ctx.filter((i) => !recordedContext.has(i.post.uri))
     if (!fresh.length) return
     for (const i of fresh) recordedContext.add(i.post.uri)
-    void archive.record($state.snapshot(fresh) as FeedItem[], 'context')
+    void corpus.record($state.snapshot(fresh) as FeedItem[], 'context')
   })
   const modes: SelectMode[] = ['top', 'recent', 'mix']
 
@@ -926,7 +927,7 @@
     if (loading) return
     try {
       const page = await getTimeline()
-      void archive.record(page.items)
+      void corpus.record(page.items)
       const have = new Set(items.map((i) => i.post.uri))
       const fresh = page.items.filter((i) => !have.has(i.post.uri))
       if (fresh.length) items = [...fresh, ...items]
@@ -982,7 +983,7 @@
     error = undefined
     try {
       const page = await getTimeline(append ? cursor : undefined)
-      void archive.record(page.items)
+      void corpus.record(page.items)
       items = append ? [...items, ...page.items] : page.items
       cursor = page.cursor
     } catch (err) {
