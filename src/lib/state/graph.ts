@@ -303,6 +303,13 @@ export function buildGraph(
     if (g) g.push(item)
     else groups.set(key, [item])
   }
+  // Loaded posts per DECLARED thread root (reply.root ref) — counts a thread
+  // family whole even when unloaded middles fragment its connectivity groups.
+  const rootFamilyCount = new Map<string, number>()
+  for (const item of unique) {
+    const r = rootUriOf(item)
+    rootFamilyCount.set(r, (rootFamilyCount.get(r) ?? 0) + 1)
+  }
 
   const inGroup = (members: FeedItem[]) => new Set(members.map((m) => m.post.uri))
 
@@ -315,8 +322,13 @@ export function buildGraph(
     const isManual = forceShow
       ? members.some((m) => forceShow.has(m.post.uri))
       : members.some((m) => expanded.has(m.post.uri))
+    // Size for the cap = the DECLARED thread family, not just this connectivity
+    // group: a partially-loaded mega-thread splinters into many small fragments
+    // (union-find only links loaded parents), and each fragment would slip
+    // under a group-size cap while the family collectively swallows the map.
+    const familySize = Math.max(members.length, ...members.map((m) => rootFamilyCount.get(rootUriOf(m)) ?? 0))
     const isExpanded =
-      isManual || (members.some((m) => expanded.has(m.post.uri)) && members.length <= autoExpandMax)
+      isManual || (members.some((m) => expanded.has(m.post.uri)) && familySize <= autoExpandMax)
     const isPrimary = (m: FeedItem) => !primary || primary.has(m.post.uri)
 
     // Drop conversations that are pure pulled-in context (no primary post of
