@@ -3,6 +3,7 @@
   import { bskyUrl, reposter, reposterProfile } from '../api/post'
   import {
     buildGraph,
+    contextNode,
     layoutPositions,
     parentUriOf,
     rootUriOf,
@@ -40,7 +41,6 @@
   const PAD_TOP = 52
   const PAD_BOTTOM = 56
   const PANEL_W = 340 // DigestPanel width; nodes lay out left of it when open
-  const REPLY_CONTEXT_GRACE = 12 // extra nodes beyond Count for reply chains/parents
   const MIN_SIZE = 34
   const MAX_SIZE = 66
   const CARD_W = 360
@@ -150,7 +150,10 @@
   // `expandedForBuild` (manual ∪ auto reply-chains) controls collapse; the raw
   // manual `expanded` set is passed separately so only user-mapped threads are
   // force-shown — auto reply-chain context stays under the node budget.
-  const graph = $derived(buildGraph(visible, expandedForBuild, primaryUris, expanded))
+  // Conversations above this size stay collapsed (+N) unless manually mapped —
+  // auto reply-chains must not let one mega-thread swallow the whole map.
+  const AUTO_UNROLL_MAX = 10
+  const graph = $derived(buildGraph(visible, expandedForBuild, primaryUris, expanded, AUTO_UNROLL_MAX))
 
   // Only primary nodes compete for the window, so the queue/turnover counts
   // are over them; context nodes ride along and don't inflate the numbers.
@@ -188,30 +191,27 @@
     if (revealedUris.size)
       for (const n of graph.nodes) if (revealedUris.has(n.uri) && !set.has(n.uri)) set.set(n.uri, n)
     if (connect) {
-      // Pulled-in parent chains are added ONLY up to a total budget, so a few
-      // deep threads can't balloon a limit-10 graph to 100+ nodes. Each selected
-      // node's ancestor chain is added whole while there's room; once the budget
-      // fills, further chains are held back ("added when there's room").
-      const budget = settings.nodeLimit + REPLY_CONTEXT_GRACE
+      // Every visible reply ALWAYS gets its full loaded chain — the Count
+      // limit governs which conversations are selected, not whether a selected
+      // conversation is drawn whole. Ancestors the user dismissed come back as
+      // dimmed GHOSTS (never on their own merits — only when a visible reply
+      // needs them for context).
       const byUri = new Map(graph.nodes.map((n) => [n.uri, n]))
-      for (const start of [...set.values()]) {
-        if (set.size >= budget) break
-        const chain: GraphNode[] = []
-        let cur: GraphNode | undefined = start
-        const guard = new Set<string>([start.uri])
-        while (cur) {
-          const p = parentUriOf(cur.item)
-          if (!p || guard.has(p)) break
-          const pn = byUri.get(p)
-          if (!pn) break
-          guard.add(p)
-          if (!set.has(p)) chain.push(pn)
-          cur = pn
+      let frontier = [...set.values()]
+      while (frontier.length) {
+        const next: GraphNode[] = []
+        for (const n of frontier) {
+          const p = parentUriOf(n.item)
+          if (!p || set.has(p)) continue
+          const pn = byUri.get(p) ?? (() => {
+            const it = contextByUri.get(p)
+            return it ? contextNode(it, read.isDismissed(p)) : undefined
+          })()
+          if (!pn) continue // parent not loaded (yet) — the fetch effect is on it
+          set.set(p, pn)
+          next.push(pn)
         }
-        for (const n of chain) {
-          if (set.size >= budget) break
-          set.set(n.uri, n)
-        }
+        frontier = next
       }
     }
     return [...set.values()]
@@ -219,9 +219,16 @@
   const nodeLayout = $derived(layoutPositions(visibleNodes))
 
   const visibleUris = $derived(new Set(visibleNodes.map((n) => n.uri)))
-  const visibleEdges = $derived(
-    graph.edges.filter((e) => visibleUris.has(e.from) && visibleUris.has(e.to)),
-  )
+  // Derived from the visible set itself (not graph.edges) so links to ghost
+  // ancestors — which aren't part of the built graph — draw like any other.
+  const visibleEdges = $derived.by(() => {
+    const out: { id: string; from: string; to: string }[] = []
+    for (const n of visibleNodes) {
+      const p = parentUriOf(n.item)
+      if (p && p !== n.uri && visibleUris.has(p)) out.push({ id: `${n.uri}->${p}`, from: n.uri, to: p })
+    }
+    return out
+  })
 
   const edgeCount = $derived.by(() => {
     const c = new Map<string, number>()
@@ -236,13 +243,72 @@
     const panelW = showDigest ? Math.min(PANEL_W, w * 0.88) : 0
     const innerW = Math.max(0, w - 2 * PAD_X - panelW)
     const innerH = Math.max(0, h - PAD_TOP - PAD_BOTTOM)
+    // Chain layout: the conversation is the spatial unit. Only the chain's
+    // topmost visible node (the OP when loaded) is anchored to the semantic
+    // axes; its replies hang below it as a tidy TREE — one row per depth,
+    // siblings spread by subtree width, oldest left — so a thread reads
+    // top-down like a conversation instead of clumping onto the OP.
+    const byUri = new Map(visibleNodes.map((n) => [n.uri, n]))
+    const childrenOf = new Map<string, GraphNode[]>()
+    for (const n of visibleNodes) {
+      const p = parentUriOf(n.item)
+      if (p && p !== n.uri && byUri.has(p)) {
+        const arr = childrenOf.get(p)
+        if (arr) arr.push(n)
+        else childrenOf.set(p, [n])
+      }
+    }
+    const X_UNIT = 58
+    const Y_UNIT = 64
+    const widths = new Map<string, number>()
+    const widthOf = (uri: string, guard: Set<string>): number => {
+      const memo = widths.get(uri)
+      if (memo !== undefined) return memo
+      if (guard.has(uri)) return 1
+      guard.add(uri)
+      const kids = childrenOf.get(uri) ?? []
+      const w = kids.length ? kids.reduce((sum, k) => sum + widthOf(k.uri, guard), 0) : 1
+      widths.set(uri, Math.max(1, w))
+      return Math.max(1, w)
+    }
+    const off = new Map<string, { dx: number; dy: number }>()
+    const assign = (uri: string, dx: number, dy: number, guard: Set<string>) => {
+      if (guard.has(uri)) return
+      guard.add(uri)
+      off.set(uri, { dx, dy })
+      const kids = (childrenOf.get(uri) ?? []).slice().sort((a, b) => a.timestamp - b.timestamp)
+      const total = kids.reduce((sum, k) => sum + widthOf(k.uri, new Set()), 0)
+      let cursor = -total / 2
+      for (const k of kids) {
+        const w = widthOf(k.uri, new Set())
+        assign(k.uri, dx + (cursor + w / 2) * X_UNIT, dy + Y_UNIT, guard)
+        cursor += w
+      }
+    }
+    const assigned = new Set<string>()
+    for (const n of visibleNodes) {
+      const p = parentUriOf(n.item)
+      if (!p || !byUri.has(p)) assign(n.uri, 0, 0, assigned)
+    }
     return visibleNodes.map((n) => {
-      const p = nodeLayout.get(n.uri) ?? { x: 0.5, y: 0.5, sizeRank: 0.5 }
+      const o = off.get(n.uri) ?? { dx: 0, dy: 0 }
+      // Walk to the chain root for the semantic position the tree hangs from.
+      let root = n
+      const guard = new Set<string>([root.uri])
+      for (;;) {
+        const p = parentUriOf(root.item)
+        const pn = p && !guard.has(p) ? byUri.get(p) : undefined
+        if (!pn) break
+        guard.add(p as string)
+        root = pn
+      }
+      const anchor = nodeLayout.get(root.uri) ?? { x: 0.5, y: 0.5, sizeRank: 0.5 }
+      const own = nodeLayout.get(n.uri) ?? { x: 0.5, y: 0.5, sizeRank: 0.5 }
       return {
         id: n.uri,
-        tx: PAD_X + p.x * innerW,
-        ty: PAD_TOP + p.y * innerH,
-        r: (MIN_SIZE + p.sizeRank * (MAX_SIZE - MIN_SIZE)) / 2,
+        tx: Math.max(PAD_X, Math.min(PAD_X + innerW, PAD_X + anchor.x * innerW + o.dx)),
+        ty: Math.max(PAD_TOP, Math.min(PAD_TOP + innerH, PAD_TOP + anchor.y * innerH + o.dy)),
+        r: (MIN_SIZE + own.sizeRank * (MAX_SIZE - MIN_SIZE)) / 2, // size stays the node's own
       }
     })
   })
@@ -711,7 +777,9 @@
     const wanted = new Set<string>()
     for (const it of allItems) {
       const p = parentUriOf(it)
-      if (p && !present.has(p) && !read.isDismissed(p)) wanted.add(it.post.uri)
+      // Dismissed parents are fetched too — they return as dimmed ghosts so a
+      // visible reply always has its chain.
+      if (p && !present.has(p)) wanted.add(it.post.uri)
     }
     if (wanted.size) ancestors.ensure([...wanted])
   })
@@ -878,8 +946,11 @@
   }
 
   function dismiss(uri: string) {
-    // Dismiss the post and every reply hanging off it, so clearing a thread
-    // clears the whole thread rather than leaving orphaned replies behind.
+    // Dismiss the post and every reply hanging off it — "I'm done with this
+    // thread". (With chains always drawn, single-post dismissal would just
+    // ghost the node in place, since its own replies keep it needed — d would
+    // appear to do nothing.) Ghosts serve the other direction: an ancestor
+    // dismissed EARLIER resurfaces dimmed when new replies arrive needing it.
     const all = [uri, ...threadDescendants(allItems, uri)]
     read.dismissMany(all)
     if (hovered && all.includes(hovered)) hovered = null
@@ -1023,6 +1094,7 @@
       hasReplies={(edgeCount.get(p.node.uri) ?? 0) > 0}
       active={hovered === p.node.uri}
       pinned={pinned.has(p.node.uri)}
+      ghost={p.node.ghost ?? false}
       unfollowed={p.node.item.post.author.did !== session.did &&
         !follows.following(p.node.item.post.author)}
       onhover={(uri) => (uri ? setHovered(uri) : scheduleClear())}

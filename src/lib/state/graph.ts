@@ -26,6 +26,9 @@ export interface GraphNode {
    * (reply parents, fetched thread replies) is false and never competes for
    * screen slots on its own; it only appears attached. */
   primary: boolean
+  /** A dismissed post resurrected because a visible reply needs its chain —
+   * rendered dimmed, never selected on its own merits. */
+  ghost?: boolean
 }
 
 /** Normalized layout position in [0,1], computed per visible set (not baked in). */
@@ -66,6 +69,26 @@ function timestampOf(item: FeedItem): number {
   const rec = item.post.record
   const created = AppBskyFeedPost.isRecord(rec) ? rec.createdAt : undefined
   return Date.parse(created ?? item.post.indexedAt)
+}
+
+/** A standalone context node for an item that isn't part of the built graph —
+ * used to resurrect DISMISSED ancestors as dimmed "ghosts" so a visible reply
+ * always has its chain. Not a thread representative; never primary. */
+export function contextNode(item: FeedItem, ghost = true): GraphNode {
+  return {
+    uri: item.post.uri,
+    cid: item.post.cid,
+    item,
+    score: postScoreRate(item),
+    timestamp: timestampOf(item),
+    rootUri: item.post.uri,
+    isThreadRoot: false,
+    collapsedCount: 0,
+    expanded: true,
+    manualExpand: false,
+    primary: false,
+    ghost,
+  }
 }
 
 /** The parent post uri this item replies to, if any (from the record's reply ref). */
@@ -237,6 +260,10 @@ export function buildGraph(
    * are force-shown in selection; the rest of `expanded` (auto reply-chains)
    * is bounded by the caller's budget. Defaults to all of `expanded`. */
   forceShow?: ReadonlySet<string>,
+  /** AUTO-expansion (reply chains) only unrolls conversations up to this many
+   * loaded members; bigger ones stay collapsed to their representative (+N) —
+   * a 60-post mega-thread must not swallow the map. Manual maps always unroll. */
+  autoExpandMax = Infinity,
 ): Graph {
   // Dedup by post uri, keeping first occurrence.
   const byUri = new Map<string, FeedItem>()
@@ -276,6 +303,13 @@ export function buildGraph(
     if (g) g.push(item)
     else groups.set(key, [item])
   }
+  // Loaded posts per DECLARED thread root (reply.root ref) — counts a thread
+  // family whole even when unloaded middles fragment its connectivity groups.
+  const rootFamilyCount = new Map<string, number>()
+  for (const item of unique) {
+    const r = rootUriOf(item)
+    rootFamilyCount.set(r, (rootFamilyCount.get(r) ?? 0) + 1)
+  }
 
   const inGroup = (members: FeedItem[]) => new Set(members.map((m) => m.post.uri))
 
@@ -283,12 +317,18 @@ export function buildGraph(
   for (const [rootUri, members] of groups) {
     // Expansion is keyed by *membership* (any member's uri was clicked to map),
     // which stays stable as fetched replies merge the group and shift its key.
-    const isExpanded = members.some((m) => expanded.has(m.post.uri))
     // Manual maps default to "all expanded" when no forceShow set is given, so
     // callers that don't distinguish (tests, single-shot) keep old behavior.
     const isManual = forceShow
       ? members.some((m) => forceShow.has(m.post.uri))
-      : isExpanded
+      : members.some((m) => expanded.has(m.post.uri))
+    // Size for the cap = the DECLARED thread family, not just this connectivity
+    // group: a partially-loaded mega-thread splinters into many small fragments
+    // (union-find only links loaded parents), and each fragment would slip
+    // under a group-size cap while the family collectively swallows the map.
+    const familySize = Math.max(members.length, ...members.map((m) => rootFamilyCount.get(rootUriOf(m)) ?? 0))
+    const isExpanded =
+      isManual || (members.some((m) => expanded.has(m.post.uri)) && familySize <= autoExpandMax)
     const isPrimary = (m: FeedItem) => !primary || primary.has(m.post.uri)
 
     // Drop conversations that are pure pulled-in context (no primary post of

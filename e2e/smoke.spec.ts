@@ -228,6 +228,38 @@ test('Reply chains is on by default; turning it off collapses the chain', async 
   expect(await page.locator('.edges path').count()).toBeLessThan(edgesBefore)
 })
 
+test('a previously-dismissed ancestor returns as a dimmed ghost for its chain', async ({ page }) => {
+  // Seed the read store (idb-keyval) with the demo thread ROOT dismissed —
+  // as if read in an earlier session — while its replies remain visible.
+  // Every visible reply must still get its chain: the root comes back dimmed.
+  // Room for the whole thread under the viewport-scaled default, so the
+  // dismissed root's replies are definitely on screen.
+  await page.addInitScript(() => localStorage.setItem('skynets.settings', JSON.stringify({ v: 2, nodeLimit: 27 })))
+  // Seeded from a static same-origin page so the write COMPLETES before the
+  // app boots (an addInitScript put races the app's read.load()).
+  await page.goto('/client-metadata.json')
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const uri = 'at://did:plc:alice.bsky.social/app.bsky.feed.post/t0'
+        const open = indexedDB.open('keyval-store', 1)
+        open.onupgradeneeded = () => open.result.createObjectStore('keyval')
+        open.onerror = () => reject(open.error)
+        open.onsuccess = () => {
+          const tx = open.result.transaction('keyval', 'readwrite')
+          tx.objectStore('keyval').put([uri], 'skynets:dismissed:did:plc:demo')
+          tx.oncomplete = () => resolve()
+          tx.onerror = () => reject(tx.error)
+        }
+      }),
+  )
+  await graphReady(page)
+  await expect(page.locator('.wrap.ghost').first()).toBeVisible({ timeout: 5000 })
+  // Ghosts carry no dismiss ✕ (they're already dismissed) and keep their edge.
+  await expect(page.locator('.wrap.ghost .dismiss')).toHaveCount(0)
+  expect(await page.locator('.edges path').count()).toBeGreaterThan(0)
+})
+
 test('config popover closes on a click outside it', async ({ page }) => {
   await graphReady(page)
   await page.locator('.gear').click()
