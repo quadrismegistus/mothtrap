@@ -91,12 +91,17 @@ describe('Archive', () => {
     expect([...profs.values()].some((p) => p.handle === 'alice.test')).toBe(true) // the author
   })
 
-  it('round-trips the feed snapshot (ordered entries + cursor)', async () => {
+  it('round-trips the feed snapshot (ordered entries + context + cursor)', async () => {
     const a = await fresh()
-    await a.putFeedSnapshot([{ uri: 'at://p/1' }, { uri: 'at://p/2', reposterDid: 'did:plc:booster' }], 'cur-123')
+    await a.putFeedSnapshot(
+      [{ uri: 'at://p/1' }, { uri: 'at://p/2', reposterDid: 'did:plc:booster' }],
+      'cur-123',
+      ['at://ancestor/1', 'at://ancestor/2'],
+    )
     const snap = await a.getFeedSnapshot()
     expect(snap?.entries.map((e) => e.uri)).toEqual(['at://p/1', 'at://p/2'])
     expect(snap?.entries[1].reposterDid).toBe('did:plc:booster')
+    expect(snap?.context).toEqual(['at://ancestor/1', 'at://ancestor/2'])
     expect(snap?.cursor).toBe('cur-123')
   })
 

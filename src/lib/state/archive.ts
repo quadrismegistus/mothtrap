@@ -98,6 +98,10 @@ export interface StoredProfile {
 export interface FeedSnapshot {
   id: 'current'
   entries: { uri: string; reposterDid?: string }[]
+  /** URIs of the on-screen CONTEXT (fetched ancestors / thread posts) at snapshot
+   * time. Restored alongside the feed so a reload paints edges + tree positions
+   * with the nodes, instead of re-fetching ancestors and reflowing a beat later. */
+  context?: string[]
   cursor?: string
   t: number
 }
@@ -314,9 +318,9 @@ export class Archive {
   }
 
   /** Persist / read the most-recent on-screen feed (single row), for reload-paint. */
-  async putFeedSnapshot(entries: FeedSnapshot['entries'], cursor?: string): Promise<void> {
+  async putFeedSnapshot(entries: FeedSnapshot['entries'], cursor?: string, context?: string[]): Promise<void> {
     if (!this.#db) return
-    await this.#db.put('session', { id: 'current', entries, cursor, t: Date.now() })
+    await this.#db.put('session', { id: 'current', entries, context, cursor, t: Date.now() })
   }
   async getFeedSnapshot(): Promise<FeedSnapshot | undefined> {
     if (!this.#db) return undefined

@@ -821,8 +821,11 @@
   $effect(() => {
     if (!archiveReady || items.length === 0) return
     const entries = items.slice(0, 500).map((i) => ({ uri: i.post.uri, reposterDid: reposterProfile(i)?.did }))
+    // Also snapshot the on-screen context (ancestors/thread posts) so a reload
+    // paints edges + tree positions immediately, not a beat behind the nodes.
+    const context = corpus.contextItems.slice(0, 500).map((i) => i.post.uri)
     const cur = cursor
-    const t = setTimeout(() => void archive.putFeedSnapshot(entries, cur), 1000)
+    const t = setTimeout(() => void archive.putFeedSnapshot(entries, cur, context), 1000)
     return () => clearTimeout(t)
   })
 
@@ -1020,8 +1023,15 @@
       try {
         const snap = await archive.getFeedSnapshot()
         if (snap?.entries.length) {
+          // Resolve feed AND context from the archive BEFORE touching any state,
+          // then mutate in one synchronous batch — so the first render already
+          // has edges + tree positions, with no bare-nodes flash. Without the
+          // context, the graph would show nodes, then reflow a beat later when
+          // the ancestors re-fetch over the network.
           const feed = await reconstructFeed(snap)
+          const ctx = snap.context?.length ? await archive.getPosts(snap.context) : undefined
           if (feed.length) {
+            if (ctx?.size) corpus.record([...ctx.values()], 'context')
             items = feed
             cursor = snap.cursor
             restored = true
