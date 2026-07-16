@@ -2,6 +2,7 @@ import {
   DEFAULT_MODEL,
   DEFAULT_OLLAMA_MODEL,
   DEFAULT_OLLAMA_URL,
+  LABEL_PROMPT_V,
   labelFeed,
   summarizeFeed,
   type Digest,
@@ -269,21 +270,35 @@ class DigestState {
     // If the label model changed, the cached labels (and their embeddings) are
     // from a different model — drop them so the new model re-labels.
     const model = this.provider === 'ollama' ? this.ollamaLabelModel || this.ollamaModel : this.model
-    if (model !== this.#labelModelUsed) {
+    // Cache key = model + prompt version: a prompt improvement re-asks like a
+    // model switch would (otherwise failed attempts stay frozen forever).
+    const modelKey = `${model}#p${LABEL_PROMPT_V}`
+    if (modelKey !== this.#labelModelUsed) {
       this.#labels.clear()
       this.#labelVecs.clear()
-      this.#labelModelUsed = model
+      this.#labelModelUsed = modelKey
     }
     // Hydrate this model's persisted labels from the archive (once per model),
     // so a reload never re-asks the model for posts it has already labeled.
-    if (this.#labelsHydratedFor !== model) {
-      this.#labelsHydratedFor = model
+    // Only when the archive is actually OPEN — an early ingest must not spend
+    // the marker on an empty read and silently disable hydration all session.
+    if (archive.ready && this.#labelsHydratedFor !== modelKey) {
+      this.#labelsHydratedFor = modelKey
       try {
-        for (const r of await archive.getLabels()) {
-          if (r.model === model && !this.#labels.has(r.uri)) this.#labels.set(r.uri, r.label)
+        const rows = await archive.getLabels()
+        const stored = new Set(rows.map((r) => r.uri))
+        for (const r of rows) {
+          if (r.model === modelKey && !this.#labels.has(r.uri)) this.#labels.set(r.uri, r.label)
         }
+        // Backfill: labels computed by passes that ran before the archive
+        // opened exist only in memory — persist them now.
+        const t = Date.now()
+        const backfill = [...this.#labels]
+          .filter(([uri]) => !stored.has(uri))
+          .map(([uri, label]) => ({ uri, label, model: modelKey, t }))
+        void archive.putLabels(backfill).catch(() => {})
       } catch {
-        /* archive closed (e.g. logged out) — labels just recompute */
+        /* transient read failure — labels just recompute */
       }
     }
     const posts = () =>
@@ -303,7 +318,7 @@ class DigestState {
       // Persist what this pass produced (attempts included), keyed to the model.
       const t = Date.now()
       void archive
-        .putLabels(todo.map((it) => ({ uri: it.post.uri, label: this.#labels.get(it.post.uri) ?? '', model, t })))
+        .putLabels(todo.map((it) => ({ uri: it.post.uri, label: this.#labels.get(it.post.uri) ?? '', model: modelKey, t })))
         .catch(() => {})
     }
     this.#capCaches()

@@ -146,6 +146,8 @@ export class Archive {
     }
   }
 
+  /** True once the per-DID DB is open. Label hydration/persistence must not
+   * spend their one-shot markers against a closed DB (reads return [] then). */
   get ready(): boolean {
     return this.#db !== undefined
   }
