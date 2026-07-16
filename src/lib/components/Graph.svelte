@@ -408,13 +408,24 @@
   const topicMembership = $derived(topicView.pills)
   const nodeCaptions = $derived(topicView.captions)
   // Node uri → its conversation's digest color, so borders and reply edges can
-  // tint by topic — neighbouring threads stay distinguishable at a glance.
+  // tint by topic. The digest labels OPs, but the tint must flood the WHOLE
+  // conversation — edges start from replies, which no pill ever names.
   const topicColorByNode = $derived.by(() => {
-    const m = new Map<string, string>()
-    for (const pill of topicMembership) {
-      for (const u of pill.uris) m.set(displayNodeOf(u), pill.color)
+    const uriConvo = new Map<string, string>()
+    for (const c of convos) for (const mem of c.members) uriConvo.set(mem.post.uri, c.id)
+    const colorByConvo = new Map<string, string>()
+    const paint = (u: string, color: string) => {
+      const cid = uriConvo.get(u)
+      if (cid && !colorByConvo.has(cid)) colorByConvo.set(cid, color)
     }
-    for (const [u, c] of nodeCaptions) m.set(displayNodeOf(u), c.color)
+    for (const pill of topicMembership) for (const u of pill.uris) paint(u, pill.color)
+    for (const [u, c] of nodeCaptions) paint(u, c.color)
+    const m = new Map<string, string>()
+    for (const n of graph.nodes) {
+      const cid = uriConvo.get(n.item.post.uri)
+      const color = cid ? colorByConvo.get(cid) : undefined
+      if (color) m.set(n.uri, color)
+    }
     return m
   })
 
