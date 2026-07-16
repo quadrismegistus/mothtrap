@@ -345,43 +345,54 @@
       return Math.max(1, w)
     }
     const off = new Map<string, { dx: number; dy: number }>()
-    const assign = (uri: string, dx: number, dy: number, guard: Set<string>) => {
+    const nodeRoot = new Map<string, string>()
+    // Per-tree offset extents, so the ROOT can be placed such that the WHOLE
+    // subtree fits on-canvas (a tree hangs down + sideways from its root; a root
+    // anchored near an edge would otherwise cram its descendants against the wall
+    // — the bottom-left pile when a quiet/old OP has no room below it).
+    const extent = new Map<string, { minDx: number; maxDx: number; maxDy: number }>()
+    const assign = (uri: string, dx: number, dy: number, guard: Set<string>, rootUri: string) => {
       if (guard.has(uri)) return
       guard.add(uri)
       off.set(uri, { dx, dy })
+      nodeRoot.set(uri, rootUri)
+      const e = extent.get(rootUri)!
+      e.minDx = Math.min(e.minDx, dx)
+      e.maxDx = Math.max(e.maxDx, dx)
+      e.maxDy = Math.max(e.maxDy, dy)
       const kids = (childrenOf.get(uri) ?? []).slice().sort((a, b) => a.timestamp - b.timestamp)
       const total = kids.reduce((sum, k) => sum + widthOf(k.uri, new Set()), 0)
       let cursor = -total / 2
       for (const k of kids) {
         const w = widthOf(k.uri, new Set())
-        assign(k.uri, dx + (cursor + w / 2) * X_UNIT, dy + Y_UNIT, guard)
+        assign(k.uri, dx + (cursor + w / 2) * X_UNIT, dy + Y_UNIT, guard, rootUri)
         cursor += w
       }
     }
     const assigned = new Set<string>()
     for (const n of visibleNodes) {
       const p = parentUriOf(n.item)
-      if (!p || !byUri.has(p)) assign(n.uri, 0, 0, assigned)
+      if (!p || !byUri.has(p)) {
+        extent.set(n.uri, { minDx: 0, maxDx: 0, maxDy: 0 })
+        assign(n.uri, 0, 0, assigned, n.uri)
+      }
     }
+    // Clamp v into [lo, hi]; if the span doesn't fit (lo > hi), centre it.
+    const fit = (v: number, lo: number, hi: number) => (lo > hi ? (lo + hi) / 2 : Math.max(lo, Math.min(hi, v)))
     return visibleNodes.map((n) => {
       const o = off.get(n.uri) ?? { dx: 0, dy: 0 }
-      // Walk to the chain root for the semantic position the tree hangs from.
-      let root = n
-      const guard = new Set<string>([root.uri])
-      for (;;) {
-        const raw = parentUriOf(root.item)
-        const p = raw ? displayNodeOf(raw) : undefined
-        const pn = p && !guard.has(p) ? byUri.get(p) : undefined
-        if (!pn) break
-        guard.add(p as string)
-        root = pn
-      }
-      const anchor = nodeLayout.get(root.uri) ?? { x: 0.5, y: 0.5, sizeRank: 0.5 }
+      const rootUri = nodeRoot.get(n.uri) ?? n.uri
+      const anchor = nodeLayout.get(rootUri) ?? { x: 0.5, y: 0.5, sizeRank: 0.5 }
+      const e = extent.get(rootUri) ?? { minDx: 0, maxDx: 0, maxDy: 0 }
+      // Place the root so leftmost/rightmost/bottommost descendants stay in-canvas,
+      // then hang the tree off that fitted root — no per-node edge cramming.
+      const rootX = fit(PAD_X + anchor.x * innerW, PAD_X - e.minDx, PAD_X + innerW - e.maxDx)
+      const rootY = fit(PAD_TOP + anchor.y * innerH, PAD_TOP, PAD_TOP + innerH - e.maxDy)
       const own = nodeLayout.get(n.uri) ?? { x: 0.5, y: 0.5, sizeRank: 0.5 }
       return {
         id: n.uri,
-        tx: Math.max(PAD_X, Math.min(PAD_X + innerW, PAD_X + anchor.x * innerW + o.dx)),
-        ty: Math.max(PAD_TOP, Math.min(PAD_TOP + innerH, PAD_TOP + anchor.y * innerH + o.dy)),
+        tx: rootX + o.dx,
+        ty: rootY + o.dy,
         r: (MIN_SIZE + own.sizeRank * (MAX_SIZE - MIN_SIZE)) / 2, // size stays the node's own
       }
     })
