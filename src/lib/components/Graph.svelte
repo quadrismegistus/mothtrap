@@ -28,6 +28,8 @@
   // prior-session posts (firstSeen < this) from ones loaded this session.
   const APP_MOUNT = Date.now()
   import { digest } from '../state/digest.svelte'
+  import { deploy } from '../state/deploy.svelte'
+  import { isDemo } from '../api/demo'
   import { convoColor } from '../api/llm'
   import { SvelteSet } from 'svelte/reactivity'
   import PostNode from './PostNode.svelte'
@@ -391,8 +393,8 @@
     )
   }
 
-  async function summarize() {
-    showDigest = true
+  async function summarize(openPanel = true) {
+    if (openPanel) showDigest = true
     // Pull more pages until we have enough posts to fill the digest window (or
     // the timeline runs out). More posts = richer conversations — the "ICE
     // killing" thread only cohered past ~30 posts — so the digest shouldn't be
@@ -404,6 +406,26 @@
     await ensureThreadRoots()
     digest.summarize(classifierInput(feedItems), contextByUri)
   }
+
+  // Auto-digest: run once per session as soon as the feed and a usable provider
+  // are both ready. Waits for the deploy config (a locked instance pins its
+  // provider/model first) and for the archive (so the rolling digest rehydrates
+  // before new labeling). Silent when no provider is reachable — a first-run
+  // desktop without Ollama keeps the manual button and no error spam.
+  let autoDigested = false
+  async function providerReady(): Promise<boolean> {
+    if (isDemo()) return true
+    if (digest.provider === 'anthropic') return !!digest.apiKey
+    await digest.refreshOllamaModels().catch(() => {})
+    return digest.ollamaModels.length > 0
+  }
+  $effect(() => {
+    if (autoDigested || !deploy.loaded || !archiveReady || feedItems.length === 0) return
+    autoDigested = true
+    void providerReady().then((ok) => {
+      if (ok) return summarize(false)
+    })
+  })
 
   // Click a conversation's exemplar in the panel → pin it and pop its card, so
   // the reference lands you on the actual node in the map. Only ONE panel-focused
