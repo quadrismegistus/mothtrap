@@ -943,12 +943,12 @@
   }
 
   function dismiss(uri: string) {
-    // A COLLAPSED thread node stands for its whole subtree, so dismissing it
-    // clears the thread. An expanded/standalone post dismisses just itself —
-    // its replies stay, and it comes back as a dimmed ghost wherever a visible
-    // reply still needs it for chain context.
-    const node = nodeByUri.get(uri)
-    const all = node && node.collapsedCount > 0 ? [uri, ...threadDescendants(allItems, uri)] : [uri]
+    // Dismiss the post and every reply hanging off it — "I'm done with this
+    // thread". (With chains always drawn, single-post dismissal would just
+    // ghost the node in place, since its own replies keep it needed — d would
+    // appear to do nothing.) Ghosts serve the other direction: an ancestor
+    // dismissed EARLIER resurfaces dimmed when new replies arrive needing it.
+    const all = [uri, ...threadDescendants(allItems, uri)]
     read.dismissMany(all)
     if (hovered && all.includes(hovered)) hovered = null
   }
