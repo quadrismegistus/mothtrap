@@ -92,10 +92,12 @@ function defaultNodeLimit(): number {
   return Math.max(8, Math.min(60, Math.round(mpx * 14.5)))
 }
 
-/** Debug tooling is a dev affordance: only offered on localhost (the hosted
- * instances hide the toggle and ignore any persisted value). */
+/** Debug tooling is a dev affordance: offered in any dev build and on
+ * localhost (covers LAN-IP phone testing via `vite --host`); the hosted
+ * instances hide the toggle and ignore any persisted value. */
 export const debugAllowed =
-  typeof location !== 'undefined' && ['localhost', '127.0.0.1'].includes(location.hostname)
+  import.meta.env.DEV ||
+  (typeof location !== 'undefined' && ['localhost', '127.0.0.1'].includes(location.hostname))
 
 /**
  * User's view preferences, persisted to localStorage. Reactive via runes, so

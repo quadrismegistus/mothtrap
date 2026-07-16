@@ -143,6 +143,10 @@ class DigestState {
     if (typeof localStorage !== 'undefined') {
       $effect.root(() => {
         $effect(() => {
+          // NOTE: this store still persists EVERY field on load (the settings
+          // store's old v1 landmine) — before changing any default below,
+          // either give it a user-set marker like `continuousSet` or move the
+          // store to diff-persistence like settings.svelte.ts.
           const data: Persisted = {
             provider: this.provider,
             model: this.model,
