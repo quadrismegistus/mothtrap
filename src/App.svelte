@@ -28,9 +28,13 @@
       </div>
       <div class="who">
         <button class="help" title="How Mothtrap works" aria-label="Help" onclick={() => (showHelp = true)}>?</button>
-        <button class="compose-btn" onclick={() => compose.openNew()}>New post</button>
-        <span>@{session.handle}</span>
-        <button onclick={() => session.logout()}>Sign out</button>
+        <button class="compose-btn" onclick={() => compose.openNew()}
+          ><span class="wide-only">New post</span><span class="narrow-only">Post</span></button
+        >
+        <span class="handle wide-only">@{session.handle}</span>
+        <button onclick={() => session.logout()}
+          ><span class="wide-only">Sign out</span><span class="narrow-only" title="Sign out" aria-hidden="true">⏻</span></button
+        >
       </div>
     </header>
     <main class="content">
@@ -122,5 +126,41 @@
   .who .compose-btn:hover {
     background: var(--accent-hover);
     border-color: var(--accent-hover);
+  }
+
+  /* Narrow screens: the header must FIT — no horizontal overflow, ever.
+     Compact labels, drop the handle, tighter gaps. */
+  .narrow-only {
+    display: none;
+  }
+  @media (max-width: 600px) {
+    .app {
+      overflow-x: clip;
+    }
+    .wide-only {
+      display: none;
+    }
+    .narrow-only {
+      display: inline;
+    }
+    .topbar {
+      padding: 0.5rem 0.6rem;
+      gap: 0.35rem;
+    }
+    .brand {
+      flex: 0 0 auto;
+      font-size: 0.95rem;
+      min-width: 0;
+    }
+    .tabs button {
+      padding: 0.3rem 0.55rem;
+    }
+    .who {
+      gap: 0.4rem;
+      min-width: 0;
+    }
+    .who button {
+      padding: 0.35rem 0.5rem;
+    }
   }
 </style>

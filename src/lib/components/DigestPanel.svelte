@@ -643,4 +643,15 @@
     font-size: 0.75rem;
     line-height: 1.35;
   }
+
+  /* Narrow screens: the drawer takes the full width — a 150px graph sliver
+     behind it is dead space, and edge-tapping to dismiss stays available via
+     the panel's own close control. */
+  @media (max-width: 600px) {
+    .panel {
+      width: 100vw;
+      max-width: 100vw;
+      border-left: none;
+    }
+  }
 </style>

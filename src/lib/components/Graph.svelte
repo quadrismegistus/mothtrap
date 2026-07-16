@@ -879,11 +879,21 @@
     if (hovered && all.has(hovered)) hovered = null
   }
 
+  // Touch has no hover, so taps carry the whole contract: first tap opens the
+  // card (read-only, sticky — PostNode suppresses synthetic hover for touch),
+  // a second tap on the same node pins it, tap-outside dismisses (clearAll).
+  const coarsePointer =
+    typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches
+
   // Distinguish single click (pin the node) from double click (open on bsky.app):
   // a lone click waits ~220ms for a possible double.
   let clickTimer: ReturnType<typeof setTimeout> | undefined
   function onNodeClick(node: GraphNode) {
     clearTimeout(clickTimer)
+    if (coarsePointer && hovered !== node.uri && !pinned.has(node.uri)) {
+      setHovered(node.uri) // tap = read; pinning waits for a repeat tap
+      return
+    }
     clickTimer = setTimeout(() => togglePin(node), 220)
   }
   function onNodeDblClick(node: GraphNode) {
@@ -1039,6 +1049,10 @@
       onmapreplies={toggleMapReplies}
       onkeep={() => setHovered(c.node.uri)}
       onleave={scheduleClear}
+      onclose={() => {
+        pinned.delete(c.node.uri)
+        if (hovered === c.node.uri) hovered = null
+      }}
     />
   {/each}
 
@@ -1367,7 +1381,7 @@
     left: 0;
     bottom: calc(100% + 8px);
     width: 500px;
-    max-width: 92vw;
+    max-width: min(92vw, calc(100vw - 24px));
     max-height: calc(100vh - 120px);
     overflow-y: auto;
     padding: 0.9rem;
@@ -1496,5 +1510,21 @@
     bottom: 16px;
     color: var(--danger);
     font-size: 0.8rem;
+  }
+
+  /* Narrow screens: axis hints are teaching aids, not controls — hide them so
+     the bottom row (gear / Digest / Load more) has the full width. */
+  @media (max-width: 600px) {
+    .axis {
+      display: none;
+    }
+    .hud {
+      right: 10px;
+      bottom: 12px;
+      gap: 0.45rem;
+    }
+    .config-wrap {
+      bottom: 12px;
+    }
   }
 </style>

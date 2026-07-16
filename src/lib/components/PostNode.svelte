@@ -83,8 +83,8 @@
   class:thread={node.isThreadRoot}
   style="left: {px}px; top: {py}px; width: {size}px; height: {size}px;"
   role="group"
-  onmouseenter={() => onhover(node.uri)}
-  onmouseleave={() => onhover(null)}
+  onpointerenter={(e) => e.pointerType === 'mouse' && onhover(node.uri)}
+  onpointerleave={(e) => e.pointerType === 'mouse' && onhover(null)}
   onpointerdown={onPointerDown}
 >
   {#if repost}

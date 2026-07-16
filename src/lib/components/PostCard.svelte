@@ -37,6 +37,8 @@
     onmapreplies: (item: FeedItem) => void
     onkeep: () => void
     onleave: () => void
+    /** Touch: explicit close (hover-out doesn't exist there). */
+    onclose?: () => void
   }
   let {
     item,
@@ -51,6 +53,7 @@
     onmapreplies,
     onkeep,
     onleave,
+    onclose,
   }: Props = $props()
 
   // Keep the card fully on screen: shift its top up if its measured height would
@@ -143,6 +146,9 @@
   onmouseenter={onkeep}
   onmouseleave={onleave}
 >
+  {#if onclose}
+    <button class="card-close" aria-label="Close" onclick={onclose}>✕</button>
+  {/if}
   {#if rt}
     <div class="repost">
       🔁 reposted by
@@ -336,6 +342,7 @@
     z-index: 100;
     width: 360px;
     max-width: 84vw;
+    --card-close: none;
     max-height: 72vh;
     overflow-y: auto;
     overflow-x: hidden;
@@ -675,5 +682,29 @@
   }
   .menu button:hover {
     background: var(--bg);
+  }
+
+  /* Touch: a real close button (hover-out doesn't exist). 44px Apple floor. */
+  .card-close {
+    display: var(--card-close);
+    position: sticky;
+    top: 0;
+    float: right;
+    width: 40px;
+    height: 40px;
+    margin: -0.35rem -0.45rem 0 0.4rem;
+    padding: 0;
+    place-items: center;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text-dim);
+    font-size: 1rem;
+    z-index: 101;
+  }
+  @media (pointer: coarse) {
+    .card {
+      --card-close: grid;
+    }
   }
 </style>
