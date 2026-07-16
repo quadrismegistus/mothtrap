@@ -1,4 +1,4 @@
-import { SvelteMap } from 'svelte/reactivity'
+import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import type { FeedItem } from '../api/timeline'
 import { reposterProfile } from '../api/post'
 import { archive, KIND_RANK, type AppearanceKind } from './archive'
@@ -18,10 +18,28 @@ import { archive, KIND_RANK, type AppearanceKind } from './archive'
 class Corpus {
   #byUri = new SvelteMap<string, FeedItem>()
   #kind = new SvelteMap<string, AppearanceKind>()
+  // URIs that have EVER served as thread/ancestor context. Tracked separately
+  // from #kind (strongest provenance) because the two roles are orthogonal: a
+  // post can be a hidden repost (filtered out of the feed) yet still be needed
+  // as a reply-chain ancestor — it must show as context even though its
+  // strongest provenance is primary. #kind decides primary-vs-context ranking;
+  // #context decides structural inclusion.
+  #context = new SvelteSet<string>()
 
   /** All corpus posts (reactive). Insertion order = first-seen order. */
   get items(): FeedItem[] {
     return [...this.#byUri.values()]
+  }
+
+  /** Posts that have served as thread/ancestor context — what the graph pulls
+   * in beyond the primary feed to complete chains. */
+  get contextItems(): FeedItem[] {
+    const out: FeedItem[] = []
+    for (const item of this.#byUri.values()) if (this.#context.has(item.post.uri)) out.push(item)
+    return out
+  }
+  hasContext(uri: string): boolean {
+    return this.#context.has(uri)
   }
 
   /** Strongest provenance recorded for a uri (primary > context), or undefined
@@ -55,6 +73,7 @@ class Corpus {
   #mergeOne(item: FeedItem, forceKind?: AppearanceKind): boolean {
     const uri = item.post.uri
     const kind = forceKind ?? (reposterProfile(item)?.did ? 'repost' : 'timeline')
+    if (forceKind === 'context') this.#context.add(uri)
     const prevKind = this.#kind.get(uri)
     if (!prevKind || KIND_RANK[kind] > KIND_RANK[prevKind]) this.#kind.set(uri, kind)
     const existing = this.#byUri.get(uri)
@@ -68,6 +87,25 @@ class Corpus {
     return false
   }
 
+  /** Persist to the archive any mirror posts fetched before the DB opened (the
+   * write-through no-ops while closed). Idempotent — the archive upserts and
+   * dedups appearances — so re-persisting an already-archived post is harmless.
+   * Each post is recorded under every role it holds (primary AND context). */
+  async flushToArchive(): Promise<void> {
+    const timeline: FeedItem[] = []
+    const reposts: FeedItem[] = []
+    const context: FeedItem[] = []
+    for (const item of this.#byUri.values()) {
+      const uri = item.post.uri
+      if (this.#kind.get(uri) === 'repost') reposts.push(item)
+      else if (this.#kind.get(uri) === 'timeline') timeline.push(item)
+      if (this.#context.has(uri)) context.push(item)
+    }
+    await archive.record(timeline, 'timeline')
+    await archive.record(reposts, 'repost')
+    await archive.record(context, 'context')
+  }
+
   /** Load the archived corpus into the mirror (call once the DB is open). Posts
    * come back without their feed-level repost reason (not stored); provenance
    * is reconstructed from the appearances log. Live records this session then
@@ -78,6 +116,7 @@ class Corpus {
       const uri = item.post.uri
       if (!this.#byUri.has(uri)) this.#byUri.set(uri, item)
       const kind = provenance.get(uri) ?? 'context'
+      if (kind === 'context') this.#context.add(uri)
       const prevKind = this.#kind.get(uri)
       if (!prevKind || KIND_RANK[kind] > KIND_RANK[prevKind]) this.#kind.set(uri, kind)
     }
@@ -86,6 +125,7 @@ class Corpus {
   clear(): void {
     this.#byUri.clear()
     this.#kind.clear()
+    this.#context.clear()
   }
 }
 

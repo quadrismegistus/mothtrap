@@ -50,6 +50,31 @@ describe('Corpus mirror', () => {
     expect(second.map((i) => i.post.uri)).toEqual(['at://p/3'])
   })
 
+  it('contextItems = every post that ever served as context (independent of provenance)', () => {
+    const c = new Corpus()
+    c.record([mkPost({ uri: 'at://feed/1' })]) // primary only
+    c.record([mkPost({ uri: 'at://ctx/1' })], 'context') // context only
+    // A hidden-repost that's ALSO a needed ancestor: primary provenance, but a
+    // context role — it must still appear in contextItems so the chain completes.
+    c.record([mkPost({ uri: 'at://both/1', repostBy: 'booster' })]) // primary (repost)
+    c.record([mkPost({ uri: 'at://both/1' })], 'context') // later pulled in as an ancestor
+    const ctxUris = c.contextItems.map((i) => i.post.uri).sort()
+    expect(ctxUris).toEqual(['at://both/1', 'at://ctx/1'])
+    expect(c.isPrimary('at://both/1')).toBe(true) // still primary…
+    expect(c.hasContext('at://both/1')).toBe(true) // …and still context
+  })
+
+  it('flushToArchive persists mirrored posts under each role they hold', async () => {
+    await archive.open('corpus-flush-test')
+    const c = new Corpus()
+    c.record([mkPost({ uri: 'at://f/1' })]) // timeline (write-through lands too, but flush is idempotent)
+    c.record([mkPost({ uri: 'at://c/1' })], 'context')
+    await c.flushToArchive()
+    const provenance = await archive.getProvenance()
+    expect(provenance.get('at://f/1')).toBe('timeline')
+    expect(provenance.get('at://c/1')).toBe('context')
+  })
+
   it('rehydrates posts + provenance from the archive on reload', async () => {
     await archive.open('corpus-rehydrate-test')
     await archive.record([mkPost({ uri: 'at://feed/1' })]) // timeline
