@@ -80,9 +80,11 @@
   let w = $state(0)
   let h = $state(0)
   // Bottom UI chrome, measured so the sim keeps nodes out of the corners it
-  // occupies (see the setBottomChrome effect).
+  // occupies (measured into bottomChrome; the canvas ends above the bar).
   let gearEl = $state<HTMLElement>()
   let hudEl = $state<HTMLElement>()
+  // Measured height of the bottom control bar — the canvas ends above it.
+  let bottomChrome = $state(0)
 
   // Live node positions, written by the simulation each tick.
   let positions = $state<Map<string, { x: number; y: number }>>(new Map())
@@ -273,7 +275,7 @@
     // usable width by the panel so every node stays visible to its left.
     const panelW = showDigest ? Math.min(PANEL_W, w * 0.88) : 0
     const innerW = Math.max(0, w - 2 * PAD_X - panelW)
-    const innerH = Math.max(0, h - PAD_TOP - PAD_BOTTOM)
+    const innerH = Math.max(0, h - PAD_TOP - Math.max(PAD_BOTTOM, bottomChrome + 8))
     // Chain layout: the conversation is the spatial unit. Only the chain's
     // topmost visible node (the OP when loaded) is anchored to the semantic
     // axes; its replies hang below it as a tidy TREE — one row per depth,
@@ -762,7 +764,7 @@
     const links = [...visibleEdges.map((e) => ({ source: e.from, target: e.to })), ...topicLinks]
     // Clamp nodes inside the canvas so they can't drift up under the top bar (the
     // graph starts below it, but the sim could otherwise push a node to the edge).
-    layout?.setBounds(w, h, 18, 24)
+    layout?.setBounds(w, h, 18, Math.max(24, bottomChrome))
     layout?.update(t, links, new Set(pinned), settings.cohesion)
   })
 
@@ -779,22 +781,18 @@
     void visibleNodes.length
     void total
     void read.dismissed.size
-    if (!graphEl || !layout) return
+    if (!graphEl) return
     const g = graphEl.getBoundingClientRect()
-    let leftW = 0
-    let rightW = 0
-    let bottom = 0
+    // The whole bottom bar is OFF-CANVAS, uniformly — like the top bar. The
+    // old per-corner keep-out made the clamp boundary discontinuous at the
+    // corner edges, and nodes crossing that x-line flip-flopped between two
+    // bottom bounds (sim vs clamp, every tick — visible jitter).
+    let inset = 0
     const gr = gearEl?.getBoundingClientRect()
-    if (gr) {
-      leftW = Math.max(leftW, gr.right - g.left + 10)
-      bottom = Math.max(bottom, g.bottom - gr.top + 10)
-    }
+    if (gr) inset = Math.max(inset, g.bottom - gr.top + 10)
     const hr = hudEl?.getBoundingClientRect()
-    if (hr) {
-      rightW = Math.max(rightW, g.right - hr.left + 10)
-      bottom = Math.max(bottom, g.bottom - hr.top + 10)
-    }
-    layout.setBottomChrome(leftW, rightW, bottom)
+    if (hr) inset = Math.max(inset, g.bottom - hr.top + 10)
+    bottomChrome = inset
   })
 
   // Connect replies: pull in the parents of any loaded reply we don't have yet
