@@ -152,8 +152,14 @@ export class Archive {
     return this.#db !== undefined
   }
 
-  /** Upsert posts, append new appearances, and sample counts on change. */
-  async record(items: FeedItem[]): Promise<void> {
+  /** Upsert posts, append new appearances, and sample counts on change.
+   *
+   * `forceKind` overrides the per-item timeline/repost inference — pass
+   * `'context'` for posts pulled in only to complete a thread or ancestor
+   * chain (they never surfaced in your feed on their own). A post can carry
+   * BOTH a timeline and a context appearance over its life; provenance is the
+   * union, so recording context never erases an earlier primary appearance. */
+  async record(items: FeedItem[], forceKind?: AppearanceKind): Promise<void> {
     const db = this.#db
     if (!db || items.length === 0) return
     const t = Date.now()
@@ -171,7 +177,9 @@ export class Archive {
         lastSeen: t,
         post: item.post,
       })
-      const { kind, reposterDid } = appearanceKind(item)
+      const { kind, reposterDid } = forceKind
+        ? { kind: forceKind, reposterDid: forceKind === 'repost' ? reposterProfile(item)?.did : undefined }
+        : appearanceKind(item)
       const akey = `${uri}|${kind}|${reposterDid ?? ''}`
       if (!this.#seenAppearance.has(akey)) {
         this.#seenAppearance.add(akey)

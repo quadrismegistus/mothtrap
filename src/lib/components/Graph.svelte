@@ -75,6 +75,22 @@
       void archive.record($state.snapshot(feedItems) as FeedItem[])
     }
   })
+  // Provenance-complete corpus (archive-first, PLAN §8 phase 2 step 1): pulled-in
+  // context — mapped threads + fetched reply ancestors + off-window revivals —
+  // is recorded to the archive as kind 'context', so the corpus holds the WHOLE
+  // graph (not just your timeline) and a reload can tell primary from context.
+  // Each post is recorded once (upsert is idempotent, but the write is scoped to
+  // genuinely-new posts to keep continuous sessions cheap). Gated on the DB being
+  // open so it never marks a post recorded against a no-op write.
+  const recordedContext = new Set<string>()
+  $effect(() => {
+    if (!archiveReady) return
+    const ctx = [...threads.posts, ...ancestors.posts, ...revived]
+    const fresh = ctx.filter((i) => !recordedContext.has(i.post.uri))
+    if (!fresh.length) return
+    for (const i of fresh) recordedContext.add(i.post.uri)
+    void archive.record($state.snapshot(fresh) as FeedItem[], 'context')
+  })
   const modes: SelectMode[] = ['top', 'recent', 'mix']
 
   let w = $state(0)
