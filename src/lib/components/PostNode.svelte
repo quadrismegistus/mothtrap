@@ -165,12 +165,13 @@
     border-color: var(--accent);
   }
   .node.replies {
-    border-color: var(--accent-hover);
+    border-color: var(--accent-topic, var(--accent-hover));
   }
-  /* Thread representative: a distinct double-ring so it reads as expandable. */
+  /* Thread representative: a distinct double-ring so it reads as expandable.
+     The ring adopts the topic tint when labeled — the SHAPE is the signal. */
   .wrap.thread .node {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+    border-color: var(--accent-topic, var(--accent));
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-topic, var(--accent));
   }
   .wrap.active {
     z-index: 50;

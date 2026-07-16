@@ -1136,7 +1136,7 @@
       {#each edgeColors as c}
         <marker id={arrowId(c)} viewBox="0 0 10 10" refX="8" refY="5"
           markerWidth="5" markerHeight="5" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" fill={c} />
+          <path d="M0,0 L10,5 L0,10 z" style="fill: {c}" />
         </marker>
       {/each}
     </defs>
@@ -1487,11 +1487,19 @@
     vertical-align: baseline;
   }
   .edges path {
-    fill: var(--text-dim);
+    fill: none;
     stroke: var(--text-dim);
     stroke-width: 2;
     opacity: 0.7;
     stroke-dasharray: 5 4;
+  }
+  /* Arrowheads: default gray; colored markers carry an inline fill that must
+     win, so keep this on the low-specificity default only. */
+  .edges marker path {
+    fill: var(--text-dim);
+    stroke: none;
+    stroke-dasharray: none;
+    opacity: 0.9;
   }
   .axis {
     position: absolute;
