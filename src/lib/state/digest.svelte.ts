@@ -12,6 +12,7 @@ import { DEFAULT_MERGE_THRESHOLD, groupByEmbedding, groupByLabel } from '../api/
 import { embedTexts } from '../api/embed'
 import type { FeedItem } from '../api/timeline'
 import { DigestEngine } from './digestEngine.svelte'
+import { archive } from './archive'
 import { deploy } from './deploy.svelte'
 import { listOllamaModels, pickClusterModel, pickDefaultModel, type OllamaModel } from '../api/ollama'
 
@@ -101,6 +102,8 @@ class DigestState {
   /** The OP set from the last label pass, so a threshold change can re-group
    * without re-labeling. */
   #lastLabelItems: FeedItem[] = []
+  /** Which model's persisted labels have been hydrated from the archive. */
+  #labelsHydratedFor = ''
   /** Which model produced the cached labels — if the user switches the label
    * model, the cache is invalidated so posts get re-labeled by the new model. */
   #labelModelUsed = ''
@@ -271,6 +274,18 @@ class DigestState {
       this.#labelVecs.clear()
       this.#labelModelUsed = model
     }
+    // Hydrate this model's persisted labels from the archive (once per model),
+    // so a reload never re-asks the model for posts it has already labeled.
+    if (this.#labelsHydratedFor !== model) {
+      this.#labelsHydratedFor = model
+      try {
+        for (const r of await archive.getLabels()) {
+          if (r.model === model && !this.#labels.has(r.uri)) this.#labels.set(r.uri, r.label)
+        }
+      } catch {
+        /* archive closed (e.g. logged out) — labels just recompute */
+      }
+    }
     const posts = () =>
       items.map((i) => ({ uri: i.post.uri, label: this.#labels.get(i.post.uri) ?? '' }))
     this.digest = groupByLabel(posts()) // reflect cached labels immediately
@@ -285,6 +300,11 @@ class DigestState {
       // continuous tick forever. Empty-labeled posts are dropped from grouping
       // but not re-requested.
       for (const it of todo) if (!this.#labels.has(it.post.uri)) this.#labels.set(it.post.uri, '')
+      // Persist what this pass produced (attempts included), keyed to the model.
+      const t = Date.now()
+      void archive
+        .putLabels(todo.map((it) => ({ uri: it.post.uri, label: this.#labels.get(it.post.uri) ?? '', model, t })))
+        .catch(() => {})
     }
     this.#capCaches()
     await this.#embedRegroup(posts().filter((p) => p.label))
