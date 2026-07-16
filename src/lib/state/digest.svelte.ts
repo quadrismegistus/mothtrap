@@ -77,7 +77,7 @@ class DigestState {
   window = $state(DEFAULT_WINDOW)
   /** Continuous mode: maintain a rolling digest via the engine (embed → gate →
    * establish/roll/skip) instead of a fresh full digest each press (PLAN §7). */
-  continuous = $state(false)
+  continuous = $state(true) // Auto-update on by default; persisted choice overrides
   /** Feed only thread OPs to the classifier (a reply is anchored to its root),
    * not the replies themselves. Reply text ("lol yes", "exactly") is noise that
    * muddies clustering even with parent context inlined; the substantive OP is

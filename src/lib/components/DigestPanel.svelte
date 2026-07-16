@@ -120,7 +120,7 @@
   {#if showConfig}
   <div class="controls">
     {#if deploy.locked}
-      <p class="note">This instance runs a shared model — nothing to configure. Just press Digest.</p>
+      <p class="note">This instance runs a shared model — nothing to configure; the digest runs by itself.</p>
     {:else if !deploy.hideOllama}
       <div class="seg">
         <button class:on={digest.provider === 'anthropic'} onclick={() => (digest.provider = 'anthropic')}>

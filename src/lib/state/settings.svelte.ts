@@ -31,12 +31,24 @@ function load(): Partial<Persisted> {
 }
 
 /**
+ * Default node count scales with viewport area: ~30 fits comfortably on a
+ * 1920x1080 desktop, so smaller screens get proportionally fewer (a phone
+ * lands near the floor). The moment the user touches the Count slider the
+ * chosen value persists and this heuristic never runs again.
+ */
+function defaultNodeLimit(): number {
+  if (typeof window === 'undefined') return 20
+  const mpx = (window.innerWidth * window.innerHeight) / 1e6
+  return Math.max(8, Math.min(60, Math.round(mpx * 14.5)))
+}
+
+/**
  * User's view preferences, persisted to localStorage. Reactive via runes, so
  * components can bind directly (e.g. `bind:value={settings.nodeLimit}`) and the
  * change is saved automatically.
  */
 class Settings {
-  nodeLimit = $state(20)
+  nodeLimit = $state(defaultNodeLimit())
   selectMode = $state<SelectMode>('mix')
   autoCycle = $state(false)
   cycleInterval = $state(4)

@@ -69,6 +69,9 @@ test('hover card like toggles the count', async ({ page }) => {
 })
 
 test('dismiss backfills to keep the visible count', async ({ page }) => {
+  // Pin the count (the default now scales with viewport) — the invariant under
+  // test is that a dismissal backfills to hold the limit.
+  await page.addInitScript(() => localStorage.setItem('skynets.settings', JSON.stringify({ nodeLimit: 20 })))
   await graphReady(page)
   await page.locator('.wrap').first().hover()
   await page.keyboard.press('d')
@@ -119,6 +122,8 @@ test('connect-replies draws edges for small threads by default', async ({ page }
 })
 
 test('a reposted node shows the reposter avatar', async ({ page }) => {
+  // The demo's one repost can fall outside the viewport-scaled default window.
+  await page.addInitScript(() => localStorage.setItem('skynets.settings', JSON.stringify({ nodeLimit: 27 })))
   await graphReady(page)
   expect(await page.locator('.reposter').count()).toBeGreaterThan(0)
 })
@@ -208,6 +213,8 @@ test('dragging moves a node without pinning; a click pins it', async ({ page }) 
 })
 
 test('Reply chains expands a collapsed thread into a connected chain', async ({ page }) => {
+  // Room for the demo thread's whole chain under the viewport-scaled default.
+  await page.addInitScript(() => localStorage.setItem('skynets.settings', JSON.stringify({ nodeLimit: 27 })))
   await graphReady(page)
   const edgesBefore = await page.locator('.edges path').count()
   await page.locator('.gear').click()
@@ -291,8 +298,7 @@ test('continuous mode auto-establishes without pressing Update (demo)', async ({
   await graphReady(page)
   await page.locator('.digest-btn').click()
   await page.locator('.convos > li').first().waitFor()
-  // Turn on auto-update — the cadence should re-label on its own (no Update click).
-  await page.locator('.toggle', { hasText: 'Auto-update' }).locator('input[type=checkbox]').check()
+  // Auto-update is on by default — the status shows with no clicks at all.
   await expect(page.locator('.engine-status')).toContainText(/auto-updating/, { timeout: 5000 })
   await expect(page.locator('.convos > li').first()).toBeVisible()
 })
@@ -338,6 +344,9 @@ test('hovering a card avatar opens a profile preview', async ({ page }) => {
 })
 
 test('hovering the reposter name opens a profile preview', async ({ page }) => {
+  // The viewport-scaled default count can leave the demo's one repost outside
+  // the window; pre-tune the persisted Count as a user would.
+  await page.addInitScript(() => localStorage.setItem('skynets.settings', JSON.stringify({ nodeLimit: 27 })))
   await graphReady(page)
   const rep = page.locator('.wrap:has(.reposter)').first()
   await rep.hover()
@@ -362,6 +371,12 @@ test('a mutual is marked "follows you" on its card', async ({ page }) => {
   expect(seen).toBe(true)
 })
 
+test('the digest runs automatically on load — labels appear with zero clicks', async ({ page }) => {
+  await graphReady(page)
+  // No .digest-btn click, no panel: topic captions/pills arrive on their own.
+  await expect(page.locator('.node-caption, .topic-node').first()).toBeVisible({ timeout: 8000 })
+})
+
 test('per-post label mode tags nodes and groups by topic', async ({ page }) => {
   await graphReady(page)
   await page.locator('.digest-btn').click()
@@ -381,6 +396,8 @@ test('merge slider re-groups labels without re-labeling', async ({ page }) => {
   await page.locator('button.go').first().click()
   await page.locator('.convos > li').first().waitFor()
   const before = await page.locator('.convos > li').count()
+  // Settings collapse once results exist (auto-digest) — open them first.
+  if (!(await page.locator('.row.window.sub').count())) await page.locator('.cfg-toggle').click()
   // Crank the threshold to the strictest — fewer merges → at least as many groups.
   await page.locator('.row.window.sub', { hasText: 'Merge' }).locator('input').fill('0.9')
   await page.waitForTimeout(300)

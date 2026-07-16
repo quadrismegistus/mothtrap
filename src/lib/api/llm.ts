@@ -554,8 +554,11 @@ export function cleanLabel(raw: string): string {
   let s = (raw.split('\n').find((l) => l.trim()) ?? '').trim()
   s = s.replace(/^(label|topic)\s*:\s*/i, '')
   s = s.replace(/^["'`*\s]+|["'`*.\s]+$/g, '')
+  s = s.replace(/_/g, ' ') // snake_case titles ("A_Title_Here") from weak models
   s = s.replace(/\s+/g, ' ')
   s = s.split(' ').slice(0, 5).join(' ').slice(0, 48)
+  // Trailing punctuation ("Something, something,") — but keep ? and !, they mean something.
+  s = s.replace(/[\s,;:.\-\u2013\u2014]+$/g, '')
   // Consistent capitalization across a weak model's varied casing: sentence-case
   // ONLY when the first word is all-lowercase, so ICE, MF DOOM, iOS keep theirs.
   const first = s.split(' ')[0]

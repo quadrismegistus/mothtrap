@@ -152,6 +152,20 @@ describe('cleanLabel', () => {
     expect(cleanLabel('Topic: climate.')).toBe('Climate')
     expect(cleanLabel('**bold topic**')).toBe('Bold topic')
   })
+  it('turns snake_case into spaces', () => {
+    expect(cleanLabel('A_Title_Here')).toBe('A Title Here')
+    expect(cleanLabel('Fire_Crisis_Update_')).toBe('Fire Crisis Update')
+  })
+  it('strips trailing punctuation but keeps ? and !', () => {
+    expect(cleanLabel('Something, something,')).toBe('Something, something')
+    expect(cleanLabel('Crystal Palace, Iguanadon, Dining Experience,')).toBe(
+      'Crystal Palace, Iguanadon, Dining Experience',
+    )
+    expect(cleanLabel('Education Awards —')).toBe('Education Awards')
+    expect(cleanLabel('Ban vs ban company;')).toBe('Ban vs ban company')
+    expect(cleanLabel('Why now?')).toBe('Why now?')
+    expect(cleanLabel('Scandal!')).toBe('Scandal!')
+  })
   it('takes the first non-empty line and caps length', () => {
     expect(cleanLabel('\n\nFirst topic\nSecond line')).toBe('First topic')
     expect(cleanLabel('one two three four five six seven')).toBe('One two three four five')
