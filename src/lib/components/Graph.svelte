@@ -702,6 +702,7 @@
         return {
           id: e.id,
           from: e.from,
+          color: topicColorByNode.get(e.from) ?? '',
           d: curvePath(
             a.px + ux * (a.size / 2),
             a.py + uy * (a.size / 2),
@@ -713,6 +714,12 @@
       })
       .filter((l): l is NonNullable<typeof l> => l !== null),
   )
+
+  const edgeColors = $derived(new Set(edgeLines.map((l) => l.color).filter(Boolean)))
+
+  function arrowId(color: string) {
+    return color ? `arrow-${color.replace(/[^a-zA-Z0-9]/g, '')}` : 'reply-arrow'
+  }
 
   function cardPos(p: { px: number; py: number; size: number }) {
     let x = p.px + p.size / 2 + 12
@@ -1122,24 +1129,23 @@
 
   <svg class="edges" width={w} height={h}>
     <defs>
-      <marker
-        id="reply-arrow"
-        viewBox="0 0 10 10"
-        refX="8"
-        refY="5"
-        markerWidth="5"
-        markerHeight="5"
-        orient="auto-start-reverse"
-      >
-        <path d="M0,0 L10,5 L0,10 z" fill="context-fill" />
+      <marker id="reply-arrow" viewBox="0 0 10 10" refX="8" refY="5"
+        markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" />
       </marker>
+      {#each edgeColors as c}
+        <marker id={arrowId(c)} viewBox="0 0 10 10" refX="8" refY="5"
+          markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill={c} />
+        </marker>
+      {/each}
     </defs>
     {#each edgeLines as line (line.id)}
       <path
         d={line.d}
         fill="none"
-        marker-end="url(#reply-arrow)"
-        style={topicColorByNode.get(line.from) ? `stroke: ${topicColorByNode.get(line.from)}; fill: ${topicColorByNode.get(line.from)}; opacity: 0.55` : ''}
+        marker-end="url(#{arrowId(line.color)})"
+        style={line.color ? `stroke: ${line.color}; opacity: 0.55` : ''}
       />
     {/each}
   </svg>
