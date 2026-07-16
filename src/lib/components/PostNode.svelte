@@ -122,6 +122,10 @@
     <span class="badge" title="{node.collapsedCount} more in thread — click to expand"
       >+{node.collapsedCount}</span
     >
+  {:else if node.run && node.run.length > 1}
+    <span class="badge run-badge" title="{node.run.length} consecutive posts by this author — the card scrolls through them"
+      >{node.run.length}≡</span
+    >
   {/if}
 
   {#if !ghost}
@@ -231,6 +235,11 @@
   .initial {
     font-weight: 700;
     color: var(--text-dim);
+  }
+  .run-badge {
+    background: var(--bg-elev);
+    color: var(--text-dim);
+    border: 1.5px solid var(--border);
   }
   .badge {
     position: absolute;

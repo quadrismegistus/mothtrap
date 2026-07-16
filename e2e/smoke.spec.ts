@@ -88,9 +88,8 @@ test('composing a post closes the modal', async ({ page }) => {
   await expect(page.locator('.modal')).toHaveCount(0)
 })
 
-test('composing a thread lands as a connected chain (small threads draw whole)', async ({ page }) => {
+test('composing a thread lands as ONE run node (a monologue, scrollable card)', async ({ page }) => {
   await graphReady(page)
-  const edgesBefore = await page.locator('.edges path').count()
   await page.locator('.compose-btn').click()
   await page.locator('.modal textarea').nth(0).fill('post one of the thread')
   await page.locator('.add').click()
@@ -99,10 +98,12 @@ test('composing a thread lands as a connected chain (small threads draw whole)',
   await page.locator('.modal textarea').nth(2).fill('post three of the thread')
   await page.locator('.post').click()
   await expect(page.locator('.modal')).toHaveCount(0)
-  // Under the planner, a small thread draws WHOLE (chains on by default):
-  // three posts, two reply edges — not a collapsed +2 node.
-  await page.waitForTimeout(800)
-  expect(await page.locator('.edges path').count()).toBeGreaterThanOrEqual(edgesBefore + 2)
+  // Contiguous self-replies are ONE display unit: a run node with a 3≡ badge,
+  // whose card scrolls through the continuation posts.
+  await expect(page.locator('.run-badge', { hasText: '3≡' })).toBeVisible()
+  const runNode = page.locator('.wrap:has(.run-badge)').first()
+  await runNode.hover()
+  await expect(page.locator('.card .run-post')).toHaveCount(2) // posts 2 and 3
 })
 
 test('composing with an image attaches and posts', async ({ page }) => {

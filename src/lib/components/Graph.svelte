@@ -235,14 +235,16 @@
       while (frontier.length) {
         const next: GraphNode[] = []
         for (const n of frontier) {
-          const p = parentUriOf(n.item)
-          if (!p || set.has(p)) continue
+          const raw = parentUriOf(n.item)
+          if (!raw) continue
+          const p = graph.memberNode.get(raw) ?? raw // the node DISPLAYING the parent
+          if (p === n.uri || set.has(p)) continue
           const pn = byUri.get(p) ?? (() => {
-            const it = contextByUri.get(p)
-            return it ? contextNode(it, read.isDismissed(p)) : undefined
+            const it = contextByUri.get(raw)
+            return it ? contextNode(it, read.isDismissed(raw)) : undefined
           })()
           if (!pn) continue // parent not loaded (yet) — the fetch effect is on it
-          set.set(p, pn)
+          set.set(pn.uri, pn)
           next.push(pn)
         }
         frontier = next
@@ -253,13 +255,24 @@
   const nodeLayout = $derived(layoutPositions(visibleNodes))
 
   const visibleUris = $derived(new Set(visibleNodes.map((n) => n.uri)))
+  // A post may be displayed by a node other than itself (run member → run
+  // head; collapsed member → representative). Ghosts display themselves.
+  const displayNodeOf = (uri: string): string => graph.memberNode.get(uri) ?? uri
   // Derived from the visible set itself (not graph.edges) so links to ghost
   // ancestors — which aren't part of the built graph — draw like any other.
   const visibleEdges = $derived.by(() => {
     const out: { id: string; from: string; to: string }[] = []
+    const seen = new Set<string>()
     for (const n of visibleNodes) {
       const p = parentUriOf(n.item)
-      if (p && p !== n.uri && visibleUris.has(p)) out.push({ id: `${n.uri}->${p}`, from: n.uri, to: p })
+      const pn = p ? displayNodeOf(p) : undefined
+      if (pn && pn !== n.uri && visibleUris.has(pn)) {
+        const id = `${n.uri}->${pn}`
+        if (!seen.has(id)) {
+          seen.add(id)
+          out.push({ id, from: n.uri, to: pn })
+        }
+      }
     }
     return out
   })
@@ -285,7 +298,8 @@
     const byUri = new Map(visibleNodes.map((n) => [n.uri, n]))
     const childrenOf = new Map<string, GraphNode[]>()
     for (const n of visibleNodes) {
-      const p = parentUriOf(n.item)
+      const raw = parentUriOf(n.item)
+      const p = raw ? displayNodeOf(raw) : undefined
       if (p && p !== n.uri && byUri.has(p)) {
         const arr = childrenOf.get(p)
         if (arr) arr.push(n)
@@ -330,7 +344,8 @@
       let root = n
       const guard = new Set<string>([root.uri])
       for (;;) {
-        const p = parentUriOf(root.item)
+        const raw = parentUriOf(root.item)
+        const p = raw ? displayNodeOf(raw) : undefined
         const pn = p && !guard.has(p) ? byUri.get(p) : undefined
         if (!pn) break
         guard.add(p as string)
@@ -399,7 +414,7 @@
   const topicTargets = $derived.by<Target[]>(() =>
     topicMembership
       .map((m) => {
-        const pts = m.uris.map((u) => targetByUri.get(u)).filter((t): t is Target => t != null)
+        const pts = m.uris.map((u) => targetByUri.get(displayNodeOf(u))).filter((t): t is Target => t != null)
         if (pts.length === 0) return null
         return {
           id: m.sid,
@@ -422,7 +437,7 @@
     topicMembership
       .map((m) => {
         const pts = m.uris
-          .map((u) => placedByUri.get(u))
+          .map((u) => placedByUri.get(displayNodeOf(u)))
           .filter((p): p is NonNullable<typeof p> => p != null)
         if (pts.length === 0) return null
         const cx = pts.reduce((s, p) => s + p.px, 0) / pts.length
@@ -1167,6 +1182,7 @@
   {#each cards as c (c.node.uri)}
     <PostCard
       item={c.node.item}
+      run={c.node.run}
       x={c.x}
       y={c.y}
       boundsH={h}

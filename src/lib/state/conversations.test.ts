@@ -48,11 +48,23 @@ describe('buildConversations', () => {
 })
 
 describe('planView', () => {
-  it('mega-thread plans to its representative, small threads draw whole', () => {
+  it('a single-author mega-thread is a MONOLOGUE: one run, drawn whole, cost 1', () => {
+    const mono = Array.from({ length: 60 }, (_, i) =>
+      i === 0
+        ? mkPost({ uri: 'at://mono/0', text: 'op', author: 'cat.bsky.social' })
+        : mkReply(`at://mono/${i}`, { root: 'at://mono/0', parent: `at://mono/${i - 1}`, author: 'cat.bsky.social' }),
+    )
+    const [c] = buildConversations(mono)
+    expect(c.displayCost).toBe(1)
+    const [p] = planView([c], { budget: 5 })
+    expect(p.level).toBe('full')
+  })
+
+  it('a multi-speaker mega-thread plans to its representative; small threads draw whole', () => {
     const mega = Array.from({ length: 60 }, (_, i) =>
       i === 0
-        ? mkPost({ uri: 'at://mega/0', text: 'op', author: 'cat.bsky.social' })
-        : mkReply(`at://mega/${i}`, { root: 'at://mega/0', parent: `at://mega/${i - 1}`, author: 'cat.bsky.social' }),
+        ? mkPost({ uri: 'at://mega/0', text: 'op', author: 'a0.test' })
+        : mkReply(`at://mega/${i}`, { root: 'at://mega/0', parent: `at://mega/${i - 1}`, author: `a${i % 7}.test` }),
     )
     const small = [
       mkPost({ uri: 'at://s/0', text: 'op', likes: 50 }),

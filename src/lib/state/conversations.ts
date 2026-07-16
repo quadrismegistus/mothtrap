@@ -1,24 +1,8 @@
 import { AppBskyFeedPost } from '@atproto/api'
 import type { FeedItem } from '../api/timeline'
-import { parentUriOf, rootUriOf } from './graph'
+import { parentUriOf, rootUriOf, segmentRuns } from './graph'
+export { segmentRuns } from './graph'
 import { postScoreRate } from './score'
-
-/**
- * The conversation model (PLAN §8): the graph as a first-class data structure.
- *
- * Every display decision this app makes — what to show, what to collapse, what
- * to unroll — is really a decision about CONVERSATIONS, but the old pipeline
- * ranked posts and discovered conversation shapes late (after selection,
- * during chain-climbs, across async fetches). Each layer knew a little; none
- * knew the whole; mega-threads and reply-flooding accounts slipped through
- * every local cap.
- *
- * Here the components are computed once, with global knowledge:
- * connected components over the union of DECLARED thread roots (reply.root
- * refs, present even when the chain's middle is unloaded) and loaded parent
- * links. A partially-fetched mega-thread is ONE conversation here, not a
- * confetti of fragments.
- */
 
 export interface Conversation {
   /** Component id: the canonical (declared or connectivity) root uri. */
@@ -34,6 +18,9 @@ export interface Conversation {
   score: number
   /** Newest member timestamp. */
   lastActivity: number
+  /** Display units: self-reply runs count as ONE (see segmentRuns) — what a
+   * 'full' rendering actually costs the budget. */
+  displayCost: number
   /** Post count per author did — the reply-flood signal. */
   authors: Map<string, number>
   /** The author who EARNED this conversation its seat: dominant over PRIMARY
@@ -128,6 +115,7 @@ export function buildConversations(items: FeedItem[], primaryUris?: ReadonlySet<
     out.push({
       id: find(members[0].post.uri),
       hasPrimary: !primaryUris || rankable.length > 0,
+      displayCost: segmentRuns(members).length,
       members,
       root,
       score: Math.max(...forRank.map((m) => postScoreRate(m))),
@@ -211,8 +199,11 @@ export function planView(convos: Conversation[], opts: PlanOpts): PlannedConvo[]
   const rotated = [...main.slice(rot), ...main.slice(0, rot)]
   for (const c of [...rotated, ...overflow]) {
     const manual = forceFull?.has(c.id) ?? false
-    const wantFull = manual || c.members.length <= autoUnrollMax
-    const fullCost = c.members.length
+    // Cost = display units (self-reply runs are one node), so a long
+    // single-author thread is CHEAP to draw whole — the monologue collapses
+    // into one scrollable node, not thirty.
+    const wantFull = manual || c.displayCost <= autoUnrollMax
+    const fullCost = c.displayCost
     if (manual) {
       // The user asked for the whole thing — it doesn't compete for budget.
       out.push({ convo: c, level: 'full', nodes: c.members })

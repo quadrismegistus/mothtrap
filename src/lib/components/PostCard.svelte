@@ -39,6 +39,9 @@
     onleave: () => void
     /** Touch: explicit close (hover-out doesn't exist there). */
     onclose?: () => void
+    /** Contiguous self-reply run this card fronts (item = run[0]): the
+     * continuation posts render as a scrollable sequence below the head. */
+    run?: FeedItem[]
   }
   let {
     item,
@@ -54,6 +57,7 @@
     onkeep,
     onleave,
     onclose,
+    run,
   }: Props = $props()
 
   // Keep the card fully on screen: shift its top up if its measured height would
@@ -94,6 +98,8 @@
   const liked = $derived(interactions.liked(item))
   const reposted = $derived(interactions.reposted(item))
   const textSegs = $derived(segments(postText(item), postFacets(item)))
+  /** The run's continuation posts (the head renders as the main card body). */
+  const continuation = $derived(run && run.length > 1 ? run.slice(1) : [])
   const images = $derived(postImages(item))
   const quoted = $derived(postQuote(item))
   const external = $derived(postExternal(item))
@@ -275,6 +281,17 @@
       </div>
       <p class="q-text">{quoted.text}</p>
     </a>
+  {/if}
+
+  {#if continuation.length}
+    <div class="run-more">
+      {#each continuation as c (c.post.uri)}
+        <div class="run-post">
+          <span class="run-time" title={fullDate(c)}>{timeAgo(c)}</span>
+          <div class="run-text">{postText(c)}</div>
+        </div>
+      {/each}
+    </div>
   {/if}
 
   <div class="actions">
@@ -706,5 +723,30 @@
     .card {
       --card-close: grid;
     }
+  }
+
+  /* Continuation posts of a self-reply run: a compact scrollable sequence.
+     The card's own max-height + overflow handles long monologues. */
+  .run-more {
+    margin-top: 0.5rem;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+  }
+  .run-post {
+    padding: 0.45rem 0 0.35rem;
+    border-bottom: 1px dashed var(--border);
+  }
+  .run-post:last-child {
+    border-bottom: none;
+  }
+  .run-time {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+  }
+  .run-text {
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 </style>
