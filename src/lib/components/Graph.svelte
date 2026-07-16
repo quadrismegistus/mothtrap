@@ -235,13 +235,32 @@
     const panelW = showDigest ? Math.min(PANEL_W, w * 0.88) : 0
     const innerW = Math.max(0, w - 2 * PAD_X - panelW)
     const innerH = Math.max(0, h - PAD_TOP - PAD_BOTTOM)
+    // Chain anchoring: a reply is anchored at its chain's TOPMOST VISIBLE
+    // ancestor (the OP when loaded), not at its own time/loudness coordinates.
+    // The conversation is the spatial unit — link forces + collide arrange the
+    // replies around the OP instead of long-range edges stretching across the
+    // map to wherever each reply's own timestamp would put it.
+    const byUri = new Map(visibleNodes.map((n) => [n.uri, n]))
+    const anchorUri = (n: GraphNode): string => {
+      let cur = n
+      const guard = new Set<string>([cur.uri])
+      for (;;) {
+        const p = parentUriOf(cur.item)
+        if (!p || guard.has(p)) return cur.uri
+        const pn = byUri.get(p)
+        if (!pn) return cur.uri
+        guard.add(p)
+        cur = pn
+      }
+    }
     return visibleNodes.map((n) => {
-      const p = nodeLayout.get(n.uri) ?? { x: 0.5, y: 0.5, sizeRank: 0.5 }
+      const p = nodeLayout.get(anchorUri(n)) ?? nodeLayout.get(n.uri) ?? { x: 0.5, y: 0.5, sizeRank: 0.5 }
+      const own = nodeLayout.get(n.uri) ?? { x: 0.5, y: 0.5, sizeRank: 0.5 }
       return {
         id: n.uri,
         tx: PAD_X + p.x * innerW,
         ty: PAD_TOP + p.y * innerH,
-        r: (MIN_SIZE + p.sizeRank * (MAX_SIZE - MIN_SIZE)) / 2,
+        r: (MIN_SIZE + own.sizeRank * (MAX_SIZE - MIN_SIZE)) / 2, // size stays the node's own
       }
     })
   })
