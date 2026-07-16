@@ -14,6 +14,8 @@
     pinned: boolean
     /** A dismissed ancestor resurrected for chain context — dimmed, no ✕. */
     ghost: boolean
+    /** Digest topic color — tints the border so neighbouring threads read apart. */
+    accent?: string
     unfollowed: boolean
     onhover: (uri: string | null) => void
     onclick: (node: GraphNode) => void
@@ -31,6 +33,7 @@
     active,
     pinned,
     ghost,
+    accent,
     unfollowed,
     onhover,
     onclick,
@@ -85,7 +88,7 @@
   class:ghost
   class:unfollowed
   class:thread={node.isThreadRoot}
-  style="left: {px}px; top: {py}px; width: {size}px; height: {size}px;"
+  style="left: {px}px; top: {py}px; width: {size}px; height: {size}px;{accent ? ` --accent-topic: ${accent};` : ''}"
   role="group"
   onpointerenter={(e) => e.pointerType === 'mouse' && onhover(node.uri)}
   onpointerleave={(e) => e.pointerType === 'mouse' && onhover(null)}
@@ -147,7 +150,9 @@
     padding: 0;
     border-radius: 50%;
     cursor: grab;
-    border: 2px solid var(--border);
+    /* Topic-tinted border when the digest has labeled this conversation;
+       status styles (pinned/thread/active) below still override. */
+    border: 2px solid var(--accent-topic, var(--border));
     background: var(--bg-elev);
     overflow: hidden;
     display: grid;
@@ -243,6 +248,7 @@
   }
   .badge {
     position: absolute;
+    z-index: 3; /* above the avatar circle (.node is z-index 1) */
     bottom: -6px;
     left: 50%;
     transform: translateX(-50%);

@@ -407,6 +407,16 @@
   })
   const topicMembership = $derived(topicView.pills)
   const nodeCaptions = $derived(topicView.captions)
+  // Node uri → its conversation's digest color, so borders and reply edges can
+  // tint by topic — neighbouring threads stay distinguishable at a glance.
+  const topicColorByNode = $derived.by(() => {
+    const m = new Map<string, string>()
+    for (const pill of topicMembership) {
+      for (const u of pill.uris) m.set(displayNodeOf(u), pill.color)
+    }
+    for (const [u, c] of nodeCaptions) m.set(displayNodeOf(u), c.color)
+    return m
+  })
 
   // Sim inputs use the members' STABLE target positions (not live ones), so the
   // topic targets don't shift every tick — which would restart the sim forever.
@@ -680,6 +690,7 @@
         const uy = dy / len
         return {
           id: e.id,
+          from: e.from,
           d: curvePath(
             a.px + ux * (a.size / 2),
             a.py + uy * (a.size / 2),
@@ -1113,7 +1124,12 @@
       </marker>
     </defs>
     {#each edgeLines as line (line.id)}
-      <path d={line.d} fill="none" marker-end="url(#reply-arrow)" />
+      <path
+        d={line.d}
+        fill="none"
+        marker-end="url(#reply-arrow)"
+        style={topicColorByNode.get(line.from) ? `stroke: ${topicColorByNode.get(line.from)}; opacity: 0.55` : ''}
+      />
     {/each}
   </svg>
 
@@ -1140,6 +1156,7 @@
       active={hovered === p.node.uri}
       pinned={pinned.has(p.node.uri)}
       ghost={p.node.ghost ?? false}
+      accent={topicColorByNode.get(p.node.uri)}
       unfollowed={p.node.item.post.author.did !== session.did &&
         !follows.following(p.node.item.post.author)}
       onhover={(uri) => (uri ? setHovered(uri) : scheduleClear())}

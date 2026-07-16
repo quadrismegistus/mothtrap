@@ -12,6 +12,7 @@
     reposterProfile,
     timeAgo,
     type QuotedPost,
+    bskyUrl,
   } from '../api/post'
   import { segments } from '../api/richtext'
   import { interactions } from '../state/interactions.svelte'
@@ -230,7 +231,14 @@
         {following ? 'Following' : 'Follow'}
       </button>
     {/if}
-    <span class="time" title={fullDate(item)}>{timeAgo(item)}</span>
+    <a
+      class="time"
+      href={bskyUrl(item)}
+      target="_blank"
+      rel="noreferrer"
+      title={fullDate(item)}
+      onclick={(e) => e.stopPropagation()}>{timeAgo(item)}</a
+    >
   </div>
   <div class="text">
     {#each textSegs as seg}{#if seg.href}<a
@@ -287,7 +295,14 @@
     <div class="run-more">
       {#each continuation as c (c.post.uri)}
         <div class="run-post">
-          <span class="run-time" title={fullDate(c)}>{timeAgo(c)}</span>
+          <a
+            class="run-time"
+            href={bskyUrl(c)}
+            target="_blank"
+            rel="noreferrer"
+            title={fullDate(c)}
+            onclick={(e) => e.stopPropagation()}>{timeAgo(c)}</a
+          >
           <div class="run-text">{postText(c)}</div>
         </div>
       {/each}
@@ -741,8 +756,19 @@
     border-bottom: none;
   }
   .run-time {
+    display: block;
+    text-align: right;
     font-size: 0.7rem;
     color: var(--text-dim);
+    text-decoration: none;
+  }
+  .run-time:hover,
+  a.time:hover {
+    color: var(--text);
+    text-decoration: underline;
+  }
+  a.time {
+    text-decoration: none;
   }
   .run-text {
     font-size: 0.85rem;
