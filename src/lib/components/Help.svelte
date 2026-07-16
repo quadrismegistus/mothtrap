@@ -37,8 +37,8 @@
     <section>
       <h3>Interacting</h3>
       <ul>
-        <li><b>Hover</b> a node to read it — the card has reply, repost / quote, and like.</li>
-        <li><b>Click</b> a node to pin it (orange ring: it stays put, card stays open); click again to release.</li>
+        <li><b>Hover</b> a node to read it (on touch: <b>tap</b>) — the card has reply, repost / quote, and like.</li>
+        <li><b>Click</b> a node to pin it (orange ring: it stays put, card stays open); click again to release. On touch the card simply stays open until its ✕ or a tap elsewhere.</li>
         <li><b>Drag</b> a node to nudge it around — it drifts back unless pinned.</li>
         <li><b>Map replies</b> on a card unspools the conversation around that post.</li>
         <li><b>Double-click</b> any node to open it on bsky.app.</li>
