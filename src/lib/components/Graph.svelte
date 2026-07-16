@@ -306,8 +306,12 @@
         else childrenOf.set(p, [n])
       }
     }
-    const X_UNIT = 58
-    const Y_UNIT = 64
+    // Grid units must EXCEED a node's collision footprint (r up to MAX_SIZE/2,
+    // plus the collide padding, doubled for two neighbours) or the tidy tree the
+    // planner builds gets shoved into a tangle by the collision force. Rows are
+    // taller than columns are wide so a thread reads top-down as a conversation.
+    const X_UNIT = MAX_SIZE + 18
+    const Y_UNIT = MAX_SIZE + 30
     const widths = new Map<string, number>()
     const widthOf = (uri: string, guard: Set<string>): number => {
       const memo = widths.get(uri)
