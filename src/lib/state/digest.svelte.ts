@@ -2,6 +2,7 @@ import {
   DEFAULT_MODEL,
   DEFAULT_OLLAMA_MODEL,
   DEFAULT_OLLAMA_URL,
+  LABEL_PROMPT_V,
   labelFeed,
   summarizeFeed,
   type Digest,
@@ -12,6 +13,7 @@ import { DEFAULT_MERGE_THRESHOLD, groupByEmbedding, groupByLabel } from '../api/
 import { embedTexts } from '../api/embed'
 import type { FeedItem } from '../api/timeline'
 import { DigestEngine } from './digestEngine.svelte'
+import { archive } from './archive'
 import { deploy } from './deploy.svelte'
 import { listOllamaModels, pickClusterModel, pickDefaultModel, type OllamaModel } from '../api/ollama'
 
@@ -105,6 +107,8 @@ class DigestState {
   /** The OP set from the last label pass, so a threshold change can re-group
    * without re-labeling. */
   #lastLabelItems: FeedItem[] = []
+  /** Which model's persisted labels have been hydrated from the archive. */
+  #labelsHydratedFor = ''
   /** Which model produced the cached labels — if the user switches the label
    * model, the cache is invalidated so posts get re-labeled by the new model. */
   #labelModelUsed = ''
@@ -280,10 +284,36 @@ class DigestState {
     // If the label model changed, the cached labels (and their embeddings) are
     // from a different model — drop them so the new model re-labels.
     const model = this.provider === 'ollama' ? this.ollamaLabelModel || this.ollamaModel : this.model
-    if (model !== this.#labelModelUsed) {
+    // Cache key = model + prompt version: a prompt improvement re-asks like a
+    // model switch would (otherwise failed attempts stay frozen forever).
+    const modelKey = `${model}#p${LABEL_PROMPT_V}`
+    if (modelKey !== this.#labelModelUsed) {
       this.#labels.clear()
       this.#labelVecs.clear()
-      this.#labelModelUsed = model
+      this.#labelModelUsed = modelKey
+    }
+    // Hydrate this model's persisted labels from the archive (once per model),
+    // so a reload never re-asks the model for posts it has already labeled.
+    // Only when the archive is actually OPEN — an early ingest must not spend
+    // the marker on an empty read and silently disable hydration all session.
+    if (archive.ready && this.#labelsHydratedFor !== modelKey) {
+      this.#labelsHydratedFor = modelKey
+      try {
+        const rows = await archive.getLabels()
+        const stored = new Set(rows.map((r) => r.uri))
+        for (const r of rows) {
+          if (r.model === modelKey && !this.#labels.has(r.uri)) this.#labels.set(r.uri, r.label)
+        }
+        // Backfill: labels computed by passes that ran before the archive
+        // opened exist only in memory — persist them now.
+        const t = Date.now()
+        const backfill = [...this.#labels]
+          .filter(([uri]) => !stored.has(uri))
+          .map(([uri, label]) => ({ uri, label, model: modelKey, t }))
+        void archive.putLabels(backfill).catch(() => {})
+      } catch {
+        /* transient read failure — labels just recompute */
+      }
     }
     const posts = () =>
       items.map((i) => ({ uri: i.post.uri, label: this.#labels.get(i.post.uri) ?? '' }))
@@ -299,6 +329,11 @@ class DigestState {
       // continuous tick forever. Empty-labeled posts are dropped from grouping
       // but not re-requested.
       for (const it of todo) if (!this.#labels.has(it.post.uri)) this.#labels.set(it.post.uri, '')
+      // Persist what this pass produced (attempts included), keyed to the model.
+      const t = Date.now()
+      void archive
+        .putLabels(todo.map((it) => ({ uri: it.post.uri, label: this.#labels.get(it.post.uri) ?? '', model: modelKey, t })))
+        .catch(() => {})
     }
     this.#capCaches()
     await this.#embedRegroup(posts().filter((p) => p.label))

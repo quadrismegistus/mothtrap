@@ -49,6 +49,16 @@ interface StoredVector {
   uri: string
   vec: number[]
 }
+/** A model-produced topic label for one post, so reloads never re-ask the
+ * model for a post it has already labeled. Empty label = the model was asked
+ * and gave nothing usable (kept so it isn't re-asked forever). */
+export interface StoredLabel {
+  uri: string
+  label: string
+  /** Which model produced it — labels from a different model are ignored. */
+  model: string
+  t: number
+}
 export interface PersistedCluster {
   id: string
   label: string
@@ -74,6 +84,7 @@ interface ArchiveSchema extends DBSchema {
   follows: { key: number; value: FollowSnapshot; indexes: { t: number } }
   vectors: { key: string; value: StoredVector }
   digest: { key: string; value: DigestStateRow }
+  labels: { key: string; value: StoredLabel; indexes: { t: number } }
 }
 
 type DB = IDBPDatabase<ArchiveSchema>
@@ -105,20 +116,26 @@ export class Archive {
     if (this.#db && this.#did === did) return
     this.#did = did || 'anon'
     // DB name is the legacy pre-Mothtrap-rename one — do not change (users' local archives)
-    this.#db = await openDB<ArchiveSchema>(`skynets-archive-${this.#did}`, 1, {
-      upgrade(db) {
-        const posts = db.createObjectStore('posts', { keyPath: 'uri' })
-        posts.createIndex('createdAt', 'createdAt')
-        const app = db.createObjectStore('appearances', { autoIncrement: true })
-        app.createIndex('uri', 'uri')
-        app.createIndex('seenAt', 'seenAt')
-        const counts = db.createObjectStore('counts', { autoIncrement: true })
-        counts.createIndex('uri', 'uri')
-        counts.createIndex('t', 't')
-        const follows = db.createObjectStore('follows', { autoIncrement: true })
-        follows.createIndex('t', 't')
-        db.createObjectStore('vectors', { keyPath: 'uri' })
-        db.createObjectStore('digest', { keyPath: 'id' })
+    this.#db = await openDB<ArchiveSchema>(`skynets-archive-${this.#did}`, 2, {
+      upgrade(db, oldVersion) {
+        if (oldVersion < 1) {
+          const posts = db.createObjectStore('posts', { keyPath: 'uri' })
+          posts.createIndex('createdAt', 'createdAt')
+          const app = db.createObjectStore('appearances', { autoIncrement: true })
+          app.createIndex('uri', 'uri')
+          app.createIndex('seenAt', 'seenAt')
+          const counts = db.createObjectStore('counts', { autoIncrement: true })
+          counts.createIndex('uri', 'uri')
+          counts.createIndex('t', 't')
+          const follows = db.createObjectStore('follows', { autoIncrement: true })
+          follows.createIndex('t', 't')
+          db.createObjectStore('vectors', { keyPath: 'uri' })
+          db.createObjectStore('digest', { keyPath: 'id' })
+        }
+        if (oldVersion < 2) {
+          const labels = db.createObjectStore('labels', { keyPath: 'uri' })
+          labels.createIndex('t', 't')
+        }
       },
     })
     // Best-effort: ask the browser not to evict the corpus under pressure.
@@ -129,6 +146,8 @@ export class Archive {
     }
   }
 
+  /** True once the per-DID DB is open. Label hydration/persistence must not
+   * spend their one-shot markers against a closed DB (reads return [] then). */
   get ready(): boolean {
     return this.#db !== undefined
   }
@@ -247,6 +266,33 @@ export class Archive {
       }),
     )
     return out
+  }
+
+  /** Upsert per-post labels. Bounded: oldest rows are evicted past the cap. */
+  async putLabels(rows: StoredLabel[]): Promise<void> {
+    if (!this.#db || rows.length === 0) return
+    const tx = this.#db.transaction('labels', 'readwrite')
+    for (const r of rows) void tx.store.put(r)
+    await tx.done
+    // Cap the store; eviction only means a very old post might be re-asked.
+    const CAP = 20_000
+    const count = await this.#db.count('labels')
+    if (count > CAP) {
+      const del = this.#db.transaction('labels', 'readwrite')
+      let cursor = await del.store.index('t').openCursor()
+      let excess = count - CAP
+      while (cursor && excess-- > 0) {
+        void cursor.delete()
+        cursor = await cursor.continue()
+      }
+      await del.done
+    }
+  }
+
+  /** All stored labels (caller filters by model). */
+  async getLabels(): Promise<StoredLabel[]> {
+    if (!this.#db) return []
+    return this.#db.getAll('labels')
   }
 
   async putDigest(clusters: PersistedCluster[]): Promise<void> {

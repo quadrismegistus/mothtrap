@@ -70,3 +70,27 @@ describe('Archive', () => {
     expect(dump.posts[0].post.uri).toBe('at://p/1')
   })
 })
+
+describe('Archive labels', () => {
+  it('round-trips per-post labels with their model', async () => {
+    const a = await fresh()
+    await a.putLabels([
+      { uri: 'at://p/1', label: 'Fire Crisis', model: 'qwen2.5:1.5b', t: 1 },
+      { uri: 'at://p/2', label: '', model: 'qwen2.5:1.5b', t: 2 }, // failed attempt — kept
+    ])
+    const rows = await a.getLabels()
+    expect(rows).toHaveLength(2)
+    expect(rows.find((r) => r.uri === 'at://p/1')?.label).toBe('Fire Crisis')
+    expect(rows.find((r) => r.uri === 'at://p/2')?.label).toBe('')
+  })
+
+  it('upserts by uri (a re-label replaces, never duplicates)', async () => {
+    const a = await fresh()
+    await a.putLabels([{ uri: 'at://p/1', label: 'Old', model: 'm', t: 1 }])
+    await a.putLabels([{ uri: 'at://p/1', label: 'New', model: 'm2', t: 2 }])
+    const rows = await a.getLabels()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].label).toBe('New')
+    expect(rows[0].model).toBe('m2')
+  })
+})
