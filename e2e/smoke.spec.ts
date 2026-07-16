@@ -104,6 +104,9 @@ test('composing a thread lands as ONE run node (a monologue, scrollable card)', 
   const runNode = page.locator('.wrap:has(.run-badge)').first()
   await runNode.hover()
   await expect(page.locator('.card .run-post')).toHaveCount(2) // posts 2 and 3
+  // Every post in the run is its own interaction target: the head's action bar
+  // sits above the continuation, and each continuation post has a compact row.
+  await expect(page.locator('.card .actions.compact')).toHaveCount(2)
 })
 
 test('composing with an image attaches and posts', async ({ page }) => {
