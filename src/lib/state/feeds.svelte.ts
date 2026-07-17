@@ -23,11 +23,10 @@ function readActive(): string {
 
 /**
  * The user's pinned Bluesky feeds, shown as the top tab bar. Following is always
- * first; the rest are their pinned feed generators (the feeds they saved or
- * created), resolved to display names. `active` — the selected feed's key — is
- * both the tab selection and the fetch target, and is persisted so a reload
- * reopens the same feed. List-type saved feeds are omitted for now (they need a
- * different fetch endpoint); a follow-up can add them.
+ * first; the rest are their pinned feed generators AND curated lists (the feeds
+ * they saved or created), resolved to display names. `active` — the selected
+ * feed's key — is both the tab selection and the fetch target, and is persisted
+ * so a reload reopens the same feed.
  */
 class Feeds {
   list = $state<Feed[]>([FOLLOWING_FEED])
@@ -59,26 +58,43 @@ class Feeds {
       const prefs = await agent.getPreferences()
       const out: Feed[] = [FOLLOWING_FEED]
       const feedUris: string[] = []
+      const listUris: string[] = []
       for (const s of prefs.savedFeeds) {
         if (!s.pinned) continue
+        // 'timeline' is Following (already first).
         if (s.type === 'feed') {
           out.push({ key: s.value, name: shortName(s.value) })
           feedUris.push(s.value)
+        } else if (s.type === 'list') {
+          out.push({ key: s.value, name: shortName(s.value) })
+          listUris.push(s.value)
         }
-        // 'timeline' is Following (already first); 'list' needs getListFeed — later.
       }
-      // Resolve feed-generator display names in one batch.
+      // Resolve display names: feed generators in one batch, lists one-by-one
+      // (there's no batch getList). Failures keep the short-name fallback.
+      const names = new Map<string, string>()
       if (feedUris.length) {
         try {
           const gens = await agent.app.bsky.feed.getFeedGenerators({ feeds: feedUris })
-          const names = new Map(gens.data.feeds.map((g) => [g.uri, g.displayName]))
-          for (const f of out) {
-            const dn = names.get(f.key)
-            if (dn) f.name = dn
-          }
+          for (const g of gens.data.feeds) names.set(g.uri, g.displayName)
         } catch {
-          /* keep the short-name fallback */
+          /* keep fallbacks */
         }
+      }
+      if (listUris.length) {
+        const resolved = await Promise.all(
+          listUris.map((uri) =>
+            agent.app.bsky.graph
+              .getList({ list: uri, limit: 1 })
+              .then((r) => [uri, r.data.list.name] as const)
+              .catch(() => undefined),
+          ),
+        )
+        for (const r of resolved) if (r) names.set(r[0], r[1])
+      }
+      for (const f of out) {
+        const dn = names.get(f.key)
+        if (dn) f.name = dn
       }
       this.list = out
       // A previously-pinned feed the user has since removed → fall back to Following.

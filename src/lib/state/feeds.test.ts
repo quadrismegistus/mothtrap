@@ -3,8 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../api/demo', () => ({ isDemo: () => false }))
 const getPreferences = vi.fn()
 const getFeedGenerators = vi.fn()
+const getList = vi.fn()
 vi.mock('../api/agent', () => ({
-  getAgent: () => ({ getPreferences, app: { bsky: { feed: { getFeedGenerators } } } }),
+  getAgent: () => ({
+    getPreferences,
+    app: { bsky: { feed: { getFeedGenerators }, graph: { getList } } },
+  }),
 }))
 
 import { feeds } from './feeds.svelte'
@@ -18,21 +22,26 @@ describe('feeds store', () => {
     feeds.loaded = false
   })
 
-  it('builds the tab list: Following first, then pinned feed generators, with resolved names', async () => {
+  it('builds the tab list: Following first, then pinned feeds AND lists, with resolved names', async () => {
     getPreferences.mockResolvedValue({
       savedFeeds: [
         { id: '1', type: 'timeline', value: 'following', pinned: true },
         { id: '2', type: 'feed', value: 'at://did:plc:x/app.bsky.feed.generator/cats', pinned: true },
         { id: '3', type: 'feed', value: 'at://did:plc:y/app.bsky.feed.generator/news', pinned: false }, // not pinned → skip
-        { id: '4', type: 'list', value: 'at://did:plc:z/app.bsky.graph.list/mine', pinned: true }, // list → omitted for now
+        { id: '4', type: 'list', value: 'at://did:plc:z/app.bsky.graph.list/mine', pinned: true }, // a curated list
       ],
     })
     getFeedGenerators.mockResolvedValue({
       data: { feeds: [{ uri: 'at://did:plc:x/app.bsky.feed.generator/cats', displayName: 'Cats 🐱' }] },
     })
+    getList.mockResolvedValue({ data: { list: { name: "Ted's DH people" } } })
     await feeds.load()
-    expect(feeds.list.map((f) => f.name)).toEqual(['Following', 'Cats 🐱'])
-    expect(feeds.list.map((f) => f.key)).toEqual(['following', 'at://did:plc:x/app.bsky.feed.generator/cats'])
+    expect(feeds.list.map((f) => f.name)).toEqual(['Following', 'Cats 🐱', "Ted's DH people"])
+    expect(feeds.list.map((f) => f.key)).toEqual([
+      'following',
+      'at://did:plc:x/app.bsky.feed.generator/cats',
+      'at://did:plc:z/app.bsky.graph.list/mine',
+    ])
   })
 
   it('keeps the short-name fallback when the generator lookup fails', async () => {
