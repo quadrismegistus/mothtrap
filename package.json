@@ -12,11 +12,13 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "playwright test",
-    "gen:metadata": "node scripts/gen-client-metadata.mjs"
+    "gen:metadata": "node scripts/gen-client-metadata.mjs",
+    "tauri": "tauri"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@tauri-apps/cli": "^2.11.4",
     "@tsconfig/svelte": "^5.0.4",
     "@types/d3-force": "^3.0.10",
     "@types/node": "^26.1.1",
