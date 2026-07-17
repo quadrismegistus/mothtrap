@@ -8,6 +8,7 @@ import {
   selectVisible,
   threadDescendants,
   treeTargets,
+  withTopicPills,
   type GraphNode,
   type TreeLayoutBox,
   type TreeNode,
@@ -505,5 +506,52 @@ describe('treeTargets', () => {
     const [t] = treeTargets([mk('solo', { x: 0.25, y: 0.75 })], box)
     expect(t.tx).toBeCloseTo(250)
     expect(t.ty).toBeCloseTo(750)
+  })
+})
+
+describe('withTopicPills', () => {
+  const post = (uri: string, opts: Partial<TreeNode> = {}): TreeNode => ({
+    uri,
+    timestamp: 0,
+    x: 0.5,
+    y: 0.5,
+    sizeRank: 0.5,
+    ...opts,
+  })
+
+  it('re-parents a pill’s thread-root members under a pill anchored at the loudest', () => {
+    const posts = [
+      post('op1', { x: 0.3, y: 0.8 }), // quieter (bigger y)
+      post('op2', { x: 0.6, y: 0.2 }), // louder (smaller y) → the anchor
+    ]
+    const out = withTopicPills(posts, [{ sid: 'topic:t', members: ['op1', 'op2'] }])
+    const pill = out.find((n) => n.uri === 'topic:t')!
+    expect(pill.parent).toBeUndefined() // the pill is a tree root
+    expect([pill.x, pill.y]).toEqual([0.6, 0.2]) // anchored at the loudest member
+    expect(out.find((n) => n.uri === 'op1')!.parent).toBe('topic:t')
+    expect(out.find((n) => n.uri === 'op2')!.parent).toBe('topic:t')
+  })
+
+  it('keeps a mid-thread member on its real reply-parent, not the pill', () => {
+    const posts = [post('op', { y: 0.3 }), post('reply', { parent: 'op', y: 0.4 })]
+    const out = withTopicPills(posts, [{ sid: 'topic:t', members: ['op', 'reply'] }])
+    expect(out.find((n) => n.uri === 'op')!.parent).toBe('topic:t') // root → under the pill
+    expect(out.find((n) => n.uri === 'reply')!.parent).toBe('op') // reply keeps its thread
+  })
+
+  it('skips a topic with fewer than 2 visible members (no pill node, no reparent)', () => {
+    const posts = [post('op')]
+    // 'missing' isn't among the posts → only 1 visible member → no pill.
+    const out = withTopicPills(posts, [{ sid: 'topic:t', members: ['op', 'missing'] }])
+    expect(out.some((n) => n.uri === 'topic:t')).toBe(false)
+    expect(out.find((n) => n.uri === 'op')!.parent).toBeUndefined()
+  })
+
+  it('leaves non-topic posts untouched', () => {
+    const posts = [post('a'), post('b', { parent: 'a' })]
+    const out = withTopicPills(posts, [])
+    expect(out).toHaveLength(2)
+    expect(out.find((n) => n.uri === 'a')!.parent).toBeUndefined()
+    expect(out.find((n) => n.uri === 'b')!.parent).toBe('a')
   })
 })

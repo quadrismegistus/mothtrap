@@ -309,6 +309,41 @@ export function treeTargets(nodes: TreeNode[], box: TreeLayoutBox): TreeTarget[]
   })
 }
 
+/** One topic pill's synthetic id + its VISIBLE member display-uris. */
+export interface TopicPill {
+  sid: string
+  members: string[]
+}
+
+/**
+ * Attach topic pills as synthetic tree roots over their members, so a topic
+ * lays out like a reply chain (pill on top, members below) instead of a pill at
+ * the members' centroid with edges radiating across the page.
+ *
+ * A pill with 2+ visible members becomes a root anchored at its LOUDEST member
+ * (smallest y = highest engagement), and each member that is a thread ROOT (no
+ * real reply-parent) re-parents under it — so mid-thread posts keep their thread
+ * intact and only OPs hang off the pill. Fewer than 2 visible members → the pill
+ * is skipped (the caller falls back to a centroid). Returns the combined node
+ * list to feed treeTargets. Pure, so the reparenting rules are testable.
+ */
+export function withTopicPills(posts: TreeNode[], pills: TopicPill[]): TreeNode[] {
+  const byUri = new Map(posts.map((p) => [p.uri, p]))
+  const pillOf = new Map<string, string>() // member uri → pill sid
+  const pillNodes: TreeNode[] = []
+  for (const pill of pills) {
+    const members = pill.members.filter((u) => byUri.has(u))
+    if (members.length < 2) continue
+    let loudest = members[0]
+    for (const u of members) if (byUri.get(u)!.y < byUri.get(loudest)!.y) loudest = u
+    const a = byUri.get(loudest)!
+    pillNodes.push({ uri: pill.sid, timestamp: 0, parent: undefined, x: a.x, y: a.y, sizeRank: 1 })
+    for (const u of members) pillOf.set(u, pill.sid)
+  }
+  const reparented = posts.map((p) => (p.parent || !pillOf.has(p.uri) ? p : { ...p, parent: pillOf.get(p.uri) }))
+  return [...pillNodes, ...reparented]
+}
+
 /** Wrapping slice of `limit` items from a sorted list starting at `offset`. */
 function windowSlice<T>(sorted: T[], limit: number, offset: number): T[] {
   const total = sorted.length

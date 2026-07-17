@@ -10,8 +10,10 @@
     rootUriOf,
     threadDescendants,
     treeTargets,
+    withTopicPills,
     type GraphNode,
     type SelectMode,
+    type TopicPill,
     type TreeNode,
   } from '../state/graph'
   import { ForceLayout, type Target } from '../state/forceLayout'
@@ -312,14 +314,19 @@
   // its replies hang below as a tidy tree. The math lives in treeTargets (pure,
   // tested); here we resolve each node's parent through displayNodeOf (run head /
   // representative) so childrenOf and root-detection agree by construction.
-  const targets = $derived.by<Target[]>(() => {
+  // A topic PILL is laid out like the root of a reply tree: it's a synthetic
+  // node anchored at its LOUDEST visible member's semantic position, and its
+  // member OPs (with their reply-subtrees) hang below it — instead of a pill at
+  // the members' centroid with edges radiating across the page. treeTargets
+  // does both the post trees and the pill trees in one pass; we split the result.
+  const treeLayout = $derived.by(() => {
     // When the digest panel is open it overlays the right edge, so shrink the
     // usable width by the panel so every node stays visible to its left.
     const panelW = showDigest ? Math.min(PANEL_W, w * 0.88) : 0
     const innerW = Math.max(0, w - 2 * PAD_X - panelW)
     const innerH = Math.max(0, h - PAD_TOP - Math.max(PAD_BOTTOM, bottomChrome + 8))
     const present = new Set(visibleNodes.map((n) => n.uri))
-    const treeNodes: TreeNode[] = visibleNodes.map((n) => {
+    const postNodes: TreeNode[] = visibleNodes.map((n) => {
       const raw = parentUriOf(n.item)
       const p = raw ? displayNodeOf(raw) : undefined
       const a = nodeLayout.get(n.uri) ?? { x: 0.5, y: 0.5, sizeRank: 0.5 }
@@ -332,7 +339,15 @@
         sizeRank: a.sizeRank,
       }
     })
-    return treeTargets(treeNodes, {
+    // Topic pills become tree roots over their (visible, display-resolved)
+    // members; withTopicPills does the loudest-anchor + thread-root reparenting.
+    const pills: TopicPill[] = topicMembership.map((m) => ({
+      sid: m.sid,
+      members: [...new Set(m.uris.map((u) => displayNodeOf(u)))].filter((u) => present.has(u)),
+    }))
+    const pillSids = new Set(pills.map((p) => p.sid))
+
+    const all = treeTargets(withTopicPills(postNodes, pills), {
       padX: PAD_X,
       padTop: PAD_TOP,
       innerW,
@@ -340,7 +355,13 @@
       minSize: MIN_SIZE,
       maxSize: MAX_SIZE,
     })
+    const posts: Target[] = []
+    const pillMap = new Map<string, Target>()
+    for (const t of all) (pillSids.has(t.id) ? pillMap.set(t.id, t) : posts.push(t))
+    return { posts, pills: pillMap }
   })
+  const targets = $derived(treeLayout.posts)
+  const pillTargets = $derived(treeLayout.pills)
 
   const nodeByUri = $derived(new Map(visibleNodes.map((n) => [n.uri, n])))
 
@@ -422,6 +443,11 @@
   const topicTargets = $derived.by<Target[]>(() =>
     topicMembership
       .map((m) => {
+        // 2+ visible members → the pill is a tree root (positioned by treeLayout);
+        // keep its wide collision radius but take the tree position.
+        const tree = pillTargets.get(m.sid)
+        if (tree) return { ...tree, r: 52 }
+        // Fewer than 2 visible → sit at the members' centroid, as before.
         const pts = m.uris.map((u) => targetByUri.get(displayNodeOf(u))).filter((t): t is Target => t != null)
         if (pts.length === 0) return null
         return {
