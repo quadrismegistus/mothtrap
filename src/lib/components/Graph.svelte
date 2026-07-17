@@ -10,8 +10,10 @@
     rootUriOf,
     threadDescendants,
     treeTargets,
+    withTopicPills,
     type GraphNode,
     type SelectMode,
+    type TopicPill,
     type TreeNode,
   } from '../state/graph'
   import { ForceLayout, type Target } from '../state/forceLayout'
@@ -324,34 +326,28 @@
     const innerW = Math.max(0, w - 2 * PAD_X - panelW)
     const innerH = Math.max(0, h - PAD_TOP - Math.max(PAD_BOTTOM, bottomChrome + 8))
     const present = new Set(visibleNodes.map((n) => n.uri))
-
-    // Topics with 2+ visible members become trees. Anchor the pill at the
-    // loudest member (smallest y = highest engagement); re-parent each member to
-    // the pill (below, in the post loop). A member that's mid-thread keeps its
-    // real reply-parent, so only thread ROOTS attach to the pill.
-    const pillOf = new Map<string, string>() // member display-uri → pill sid
-    const pillNodes: TreeNode[] = []
-    for (const pill of topicMembership) {
-      const members = [...new Set(pill.uris.map((u) => displayNodeOf(u)))].filter((u) => present.has(u))
-      if (members.length < 2) continue
-      let loudest = members[0]
-      for (const u of members) if ((nodeLayout.get(u)?.y ?? 1) < (nodeLayout.get(loudest)?.y ?? 1)) loudest = u
-      const a = nodeLayout.get(loudest) ?? { x: 0.5, y: 0.5, sizeRank: 0.5 }
-      pillNodes.push({ uri: pill.sid, timestamp: 0, parent: undefined, x: a.x, y: a.y, sizeRank: 1 })
-      for (const u of members) pillOf.set(u, pill.sid)
-    }
-
     const postNodes: TreeNode[] = visibleNodes.map((n) => {
       const raw = parentUriOf(n.item)
       const p = raw ? displayNodeOf(raw) : undefined
       const a = nodeLayout.get(n.uri) ?? { x: 0.5, y: 0.5, sizeRank: 0.5 }
-      // Real reply-parent wins (keep threads intact); a thread-root that's a
-      // topic member hangs under its pill instead of anchoring on its own.
-      const parent = (p && p !== n.uri && present.has(p) ? p : undefined) ?? pillOf.get(n.uri)
-      return { uri: n.uri, timestamp: n.timestamp, parent, x: a.x, y: a.y, sizeRank: a.sizeRank }
+      return {
+        uri: n.uri,
+        timestamp: n.timestamp,
+        parent: p && p !== n.uri && present.has(p) ? p : undefined,
+        x: a.x,
+        y: a.y,
+        sizeRank: a.sizeRank,
+      }
     })
+    // Topic pills become tree roots over their (visible, display-resolved)
+    // members; withTopicPills does the loudest-anchor + thread-root reparenting.
+    const pills: TopicPill[] = topicMembership.map((m) => ({
+      sid: m.sid,
+      members: [...new Set(m.uris.map((u) => displayNodeOf(u)))].filter((u) => present.has(u)),
+    }))
+    const pillSids = new Set(pills.map((p) => p.sid))
 
-    const all = treeTargets([...pillNodes, ...postNodes], {
+    const all = treeTargets(withTopicPills(postNodes, pills), {
       padX: PAD_X,
       padTop: PAD_TOP,
       innerW,
@@ -360,9 +356,9 @@
       maxSize: MAX_SIZE,
     })
     const posts: Target[] = []
-    const pills = new Map<string, Target>()
-    for (const t of all) (t.id.startsWith('topic:') ? pills.set(t.id, t) : posts.push(t))
-    return { posts, pills }
+    const pillMap = new Map<string, Target>()
+    for (const t of all) (pillSids.has(t.id) ? pillMap.set(t.id, t) : posts.push(t))
+    return { posts, pills: pillMap }
   })
   const targets = $derived(treeLayout.posts)
   const pillTargets = $derived(treeLayout.pills)
