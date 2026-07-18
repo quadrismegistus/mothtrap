@@ -313,3 +313,56 @@ describe('un-silencing takes effect immediately', () => {
     expect(moderation.isMuted(item.post.author)).toBe(true) // still muted
   })
 })
+
+describe('block state machine under concurrency', () => {
+  it('a failed re-block does not resurrect a record already deleted', async () => {
+    // The rollback used to drop the un-block it consumed, so this read as
+    // blocked off the stale fetch-time viewer.blocking — sealing content with
+    // canReveal:false against a record that no longer existed.
+    const item = makeItem({ viewer: { blocking: 'at://me/app.bsky.graph.block/OLD' } })
+    await moderation.unblock(item.post.author)
+    vi.mocked(api.blockActor).mockRejectedValueOnce(new Error('offline'))
+    await expect(moderation.block(item.post.author)).rejects.toThrow('offline')
+    expect(moderation.isBlocked(item.post.author)).toBe(false)
+  })
+
+  it('block → unblock → block in one round trip undoes the superseded record', async () => {
+    // Presence checks weren't enough: the first call saw "an entry exists",
+    // skipped its undo, and left its record live on the network for ever.
+    const item = makeItem()
+    let release: (v: { uri: string }) => void = () => {}
+    vi.mocked(api.blockActor).mockReturnValueOnce(new Promise((r) => (release = r)))
+    const first = moderation.block(item.post.author)
+    await moderation.unblock(item.post.author)
+    vi.mocked(api.blockActor).mockResolvedValueOnce({ uri: 'at://me/block/REC2' })
+    await moderation.block(item.post.author)
+    release({ uri: 'at://me/block/REC1' })
+    await first
+    expect(vi.mocked(api.unblockActor).mock.calls.map((c) => c[0])).toContain('at://me/block/REC1')
+    expect(moderation.blockUri(item.post.author)).toBe('at://me/block/REC2')
+  })
+
+  it('a failed undo shows the live record rather than denying it', async () => {
+    const item = makeItem()
+    let release: (v: { uri: string }) => void = () => {}
+    vi.mocked(api.blockActor).mockReturnValueOnce(new Promise((r) => (release = r)))
+    vi.mocked(api.unblockActor).mockRejectedValueOnce(new Error('offline'))
+    const pending = moderation.block(item.post.author)
+    await moderation.unblock(item.post.author)
+    release({ uri: 'at://me/block/REC1' })
+    await pending
+    // The record IS live, so the UI must say blocked and offer a working undo.
+    expect(moderation.isBlocked(item.post.author)).toBe(true)
+    expect(moderation.blockUri(item.post.author)).toBe('at://me/block/REC1')
+  })
+
+  it('reveals one layer at a time, so a mute cannot dismiss an unseen label', async () => {
+    const item = makeItem({ labels: ['!warn'] })
+    await moderation.mute(item.post.author)
+    expect(moderation.cover(item).reason).toBe('Muted account')
+    moderation.reveal(item)
+    expect(moderation.cover(item).reason).toBe('Content warning') // still covered
+    moderation.reveal(item)
+    expect(moderation.cover(item).blur).toBe(false)
+  })
+})

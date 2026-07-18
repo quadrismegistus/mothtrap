@@ -4,6 +4,16 @@ import { terms, TERMS_VERSION } from './terms.svelte'
 
 vi.mock('../api/platform', () => ({ isNative: vi.fn(() => false) }))
 
+// vitest runs in `node`, which has no localStorage, so every read/write in
+// terms.svelte.ts hit its catch and the persistence path — the actual App
+// Review evidence — was never executed by a test.
+const store = new Map<string, string>()
+vi.stubGlobal('localStorage', {
+  getItem: (k: string) => store.get(k) ?? null,
+  setItem: (k: string, v: string) => void store.set(k, v),
+  removeItem: (k: string) => void store.delete(k),
+})
+
 beforeEach(() => terms.reset())
 afterEach(() => vi.mocked(platform.isNative).mockReturnValue(false))
 
@@ -42,8 +52,23 @@ describe('terms gate', () => {
     expect(terms.required).toBe(true)
   })
 
-  it('treats an unreadable store as not agreed', () => {
-    // Private mode: ask again rather than assume agreement.
-    expect(terms.acceptedVersion).toBe(0)
+  it('actually persists the agreement', () => {
+    vi.mocked(platform.isNative).mockReturnValue(true)
+    terms.accept()
+    expect(store.get('mothtrap.termsAccepted')).toBe(String(TERMS_VERSION))
+    terms.reset()
+    expect(store.has('mothtrap.termsAccepted')).toBe(false)
+  })
+
+  it('clamps a forged version so it cannot defeat future bumps', async () => {
+    // "999" would otherwise satisfy every future TERMS_VERSION for ever.
+    store.set('mothtrap.termsAccepted', '999')
+    vi.resetModules()
+    const fresh = await import('./terms.svelte')
+    expect(fresh.terms.acceptedVersion).toBe(TERMS_VERSION)
+    store.set('mothtrap.termsAccepted', 'nonsense')
+    vi.resetModules()
+    const bad = await import('./terms.svelte')
+    expect(bad.terms.acceptedVersion).toBe(0)
   })
 })

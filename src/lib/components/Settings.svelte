@@ -171,7 +171,7 @@
         <p class="blurb">
           You agreed to version {terms.acceptedVersion} of the
           <a href="{base}terms.html" target="_blank" rel="noreferrer">terms of use</a>. Withdrawing
-          means Mothtrap will ask again before it next runs.
+          takes effect immediately: the app returns to the agreement screen.
         </p>
         <div class="actions">
           <button class="danger" onclick={() => terms.reset()}>Withdraw agreement</button>

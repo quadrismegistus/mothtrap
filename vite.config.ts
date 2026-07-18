@@ -30,16 +30,32 @@ const MIME: Record<string, string> = {
 const serveModelsRaw: Plugin = {
   name: 'mothtrap-serve-models-raw',
   configureServer(server) {
-    const modelsRoot = path.resolve(server.config.root, 'public', 'models')
+    const modelsRoot = fs.realpathSync(path.resolve(server.config.root, 'public', 'models'))
     server.middlewares.use((req, res, next) => {
       const url = (req.url ?? '').split('?')[0]
       if (!url.startsWith('/models/')) return next()
-      const file = path.resolve(server.config.root, 'public', url.slice(1))
+      let file = path.resolve(server.config.root, 'public', url.slice(1))
+      // realpath, not just resolve: path.resolve is purely lexical, so a symlink
+      // inside public/models passed the prefix check and the middleware served
+      // straight through it — granting more than Vite's own server.fs.deny does.
+      try {
+        file = fs.realpathSync(file)
+      } catch {
+        return next() // missing, or a broken link
+      }
       // Refuse anything that escapes the models directory.
       if (!file.startsWith(modelsRoot + path.sep)) return next()
-      if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return next()
+      if (!fs.statSync(file).isFile()) return next()
       res.setHeader('Content-Type', MIME[path.extname(file)] ?? 'application/octet-stream')
-      fs.createReadStream(file).pipe(res)
+      // An unhandled stream error takes the whole dev server down — and there is
+      // a real race here, since scripts/fetch-embed-model.sh rewrites these very
+      // files and the build runs it on every `npm run build`.
+      fs.createReadStream(file)
+        .on('error', () => {
+          res.statusCode = 500
+          res.end()
+        })
+        .pipe(res)
     })
   },
 }

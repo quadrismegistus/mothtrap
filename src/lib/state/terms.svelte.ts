@@ -23,7 +23,12 @@ export const TERMS_VERSION = 1
 
 function read(): number {
   try {
-    return Number(localStorage.getItem(KEY)) || 0
+    const n = Number(localStorage.getItem(KEY))
+    // Clamp to versions that actually exist. A stored "999" (or "1e999", or
+    // "0x10") would otherwise satisfy every future bump, silently voiding the
+    // re-consent this file promises. Anything unparseable reads as 0.
+    if (!Number.isInteger(n) || n < 0) return 0
+    return Math.min(n, TERMS_VERSION)
   } catch {
     return 0 // private mode — ask again rather than assume agreement
   }

@@ -12,8 +12,8 @@
     {#if declined}
       <h2>Mothtrap needs your agreement to run</h2>
       <p>
-        That's a fair answer, and nothing has been sent or stored. But these terms are the basis on
-        which the app operates, so it can't continue without them.
+        That's a fair answer. But these terms are the basis on which the app operates, so it can't
+        continue without them.
       </p>
       <div class="row">
         <button class="primary" onclick={() => (declined = false)}>Back</button>
@@ -29,7 +29,7 @@
       <p>
         Mothtrap displays Bluesky; it doesn't host it. So every post has
         <strong>report</strong>, <strong>mute</strong> and <strong>block</strong> in its ⋯ menu,
-        reports go to the moderation services that can actually act, and the labels, mutes and
+        reports go to the moderation service that can actually act, and the labels, mutes and
         blocks on your account are honoured here.
       </p>
 

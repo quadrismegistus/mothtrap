@@ -7,8 +7,10 @@ import { isDemo } from './demo'
  * wrappers over the agent, each demo-guarded, each returning whatever an undo
  * will need (a block is a repo record, so blocking hands back its uri).
  *
- * Reports go to the user's PDS moderation service — Bluesky's, plus any labeler
- * they subscribe to. Mothtrap is a client, not a moderator: acting on a report
+ * Reports go to the moderation service for the USER's own account:
+ * createModerationReport is a bare passthrough to the agent's own service, and
+ * nothing here sets an atproto-proxy header, so a report is never routed to a
+ * labeler. Saying otherwise (as this comment once did) is wrong on both halves. Mothtrap is a client, not a moderator: acting on a report
  * happens upstream of us, which is also the honest answer to an app-store
  * reviewer asking who responds to reports and how quickly.
  *
