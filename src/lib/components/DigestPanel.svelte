@@ -76,13 +76,83 @@
     const id = setInterval(() => (elapsed = (Date.now() - start) / 1000), 100)
     return () => clearInterval(id)
   })
+
+  // Swipe the panel back out to the right, the way it came in. Touch only:
+  // with a mouse the close button is already an easy target, and a click-drag
+  // that dismisses would fight text selection.
+  let panelEl = $state<HTMLElement | null>(null)
+  let dragX = $state(0)
+  let dragging = $state(false)
+  let startX = 0
+  let startY = 0
+  let axis: 'x' | 'y' | null = null
+  let pointer = -1
+
+  const DISMISS_PX = 90 // far enough that a lazy sideways scroll doesn't close
+
+  function reset() {
+    dragX = 0
+    dragging = false
+    axis = null
+    pointer = -1
+  }
+
+  function down(e: PointerEvent) {
+    if (e.pointerType === 'mouse') return
+    startX = e.clientX
+    startY = e.clientY
+    axis = null
+    pointer = e.pointerId
+  }
+
+  function move(e: PointerEvent) {
+    if (e.pointerId !== pointer) return
+    const dx = e.clientX - startX
+    const dy = e.clientY - startY
+    if (!axis) {
+      // Wait for a decisive direction before claiming the gesture, so a
+      // vertical scroll through the conversation list is never stolen.
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return
+      axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'
+      if (axis === 'x') {
+        // Keep receiving moves once the finger leaves the panel. Throws if the
+        // pointer is already gone; that just means there is nothing to capture.
+        try {
+          panelEl?.setPointerCapture(e.pointerId)
+        } catch {
+          /* pointer released mid-gesture */
+        }
+      }
+    }
+    if (axis !== 'x') return
+    dragging = true
+    dragX = Math.max(0, dx) // rightward only; leftward has nowhere to go
+  }
+
+  function up() {
+    if (axis === 'x' && dragX > DISMISS_PX) {
+      reset()
+      onclose()
+      return
+    }
+    reset()
+  }
 </script>
 
 {#snippet info(text: string)}
   <span class="info" title={text} aria-label={text}>ⓘ</span>
 {/snippet}
 
-<aside class="panel">
+<aside
+  class="panel"
+  class:dragging
+  bind:this={panelEl}
+  style="transform: translateX({dragX}px)"
+  onpointerdown={down}
+  onpointermove={move}
+  onpointerup={up}
+  onpointercancel={reset}
+>
   <header>
     <strong>Conversations</strong>
     <div class="head-actions">
@@ -315,12 +385,15 @@
     position: absolute;
     top: 0;
     right: 0;
-    /* Runs to the floor. Ending the panel at the bar's measured top looked
-       right in a browser at the same dimensions but left a band of graph
-       showing through on the device — measuring chrome from a container whose
-       own bottom sits under the home indicator is not worth getting exactly
-       right when it can simply be made impossible. The bar is z-index 30 and
-       floats above; the list below pads itself so nothing hides under it. */
+    /* Runs to the floor and sits ABOVE the bottom bar (z-index 30), rather
+       than stopping at the bar's measured top. Two earlier attempts tried to
+       end the panel exactly where the bar begins; both measured flush in a
+       browser and both still leaked a strip of graph on the device, because
+       the container being measured extends under the home indicator. Covering
+       the bar removes the seam entirely instead of positioning against it.
+       Nothing is lost: the bar's controls act on the graph behind the panel,
+       so they have nothing to do while it is open. Close with the ✕ or by
+       swiping right. */
     bottom: 0;
     width: 340px;
     max-width: 88vw;
@@ -329,8 +402,10 @@
     box-shadow: -10px 0 30px rgba(0, 0, 0, 0.35);
     display: flex;
     flex-direction: column;
-    z-index: 20;
+    z-index: 40; /* over the bottom bar (30) — see above */
     font-size: 0.85rem;
+    touch-action: pan-y; /* leave vertical scrolling to the list */
+    transition: transform 0.18s ease;
   }
   header {
     display: flex;
@@ -340,11 +415,27 @@
     border-bottom: 1px solid var(--border);
   }
   .x {
+    display: grid;
+    place-items: center;
+    /* 44px is Apple's minimum comfortable touch target; the old button was a
+       bare glyph roughly a third of that. */
+    min-width: 44px;
+    min-height: 44px;
+    margin: -0.4rem -0.4rem -0.4rem 0; /* grow the target, not the header */
     background: transparent;
     border: none;
+    border-radius: 8px;
     color: var(--text-dim);
-    font-size: 0.9rem;
+    font-size: 1.05rem;
     cursor: pointer;
+  }
+  .x:active {
+    background: var(--bg);
+  }
+  /* While a swipe is in progress the panel tracks the finger exactly; easing
+     it would lag behind the gesture. The transition returns for the release. */
+  .panel.dragging {
+    transition: none;
   }
   .head-actions {
     display: flex;
@@ -585,8 +676,6 @@
     list-style: none;
     margin: 0;
     padding: 0;
-    /* Clear the floating bottom bar, which now sits over the panel. */
-    padding-bottom: calc(var(--bottom-bar, 0px) + 12px);
     overflow-y: auto;
     flex: 1 1 0;
   }
