@@ -41,6 +41,46 @@ Ollama, so offer Anthropic (BYO key) / demo only:
 { "provider": "anthropic", "hideOllama": true }
 ```
 
+## ⚠️ The deployment must not log request bodies
+
+**This is a standing constraint, not advice.** Two user-facing claims depend on
+it, and neither lives in this repo:
+
+- `public/privacy.html` tells people the digest's post text is "processed in
+  memory to answer that request, and is then gone", and that the model service
+  "logs only that a request happened and how long it took".
+- The App Store privacy declaration answers **"Data Not Collected"** for it.
+  Apple defines *collect* as transmitting data off-device in a way that lets you
+  access it for longer than needed to service the request in real time. That
+  answer is true only while nothing retains the bodies.
+
+So a server-side config change alone can make both statements false — with no
+code change, no failing test, and nothing visible in a diff. Specifically:
+
+- **Do not set `OLLAMA_DEBUG`** (or otherwise raise Ollama's log level): it logs
+  prompt contents, which is exactly the post text we promise not to keep.
+- **Do not add `$request_body`** to an nginx `log_format`, and do not enable any
+  body-capturing module on the `/ollama/` location. The default `combined`
+  format is body-free — keep it.
+- Anything else that persists request payloads — a debugging proxy, a WAF with
+  payload capture, a tracing sidecar — has the same effect.
+
+Verified good as of 2026-07-18: nginx uses the stock `combined` format with no
+`$request_body` anywhere, and Ollama runs without `OLLAMA_DEBUG` (1503 request
+lines over seven days, none containing `messages`/`content`/`role`). nginx
+rotates daily and keeps 14 days of request metadata — time, IP, path; no bodies.
+
+To re-check after touching the box:
+
+```bash
+nginx -T | grep -E "log_format|request_body"        # expect no $request_body
+systemctl show ollama -p Environment                 # expect no OLLAMA_DEBUG
+journalctl -u ollama --since "7 days ago" | grep -cE '"(messages|content|role)"'   # expect 0
+```
+
+If any of these change, update `public/privacy.html` and the App Store privacy
+answers in the same breath — or revert the change.
+
 ## Hosting on a box with Ollama (the mothtrap.blue setup)
 
 Co-locate Ollama with the site and proxy it same-origin, so a deployed https page
