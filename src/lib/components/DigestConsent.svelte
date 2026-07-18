@@ -29,8 +29,9 @@
       <ul>
         <li>the text of the posts on screen</li>
         <li><strong>the handles of the people who wrote them</strong></li>
-        <li>public like/repost/reply counts</li>
+        <li>for a reply or quote, the post it responds to</li>
       </ul>
+      <p class="fine">Each post is sent once; its label is then cached on your device.</p>
 
       {#if cloud}
         <p class="note">

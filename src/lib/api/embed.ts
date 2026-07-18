@@ -67,8 +67,11 @@ function demoEmbed(text: string, d = 32): number[] {
 export async function embedTexts(texts: string[], opts: EmbedOpts = {}): Promise<number[][]> {
   if (texts.length === 0) return []
   if (isDemo()) return texts.map((t) => demoEmbed(t))
-  // Embeddings are the FIRST thing the engine sends — before any LLM call — so
-  // the gate has to cover them too, or post text would leave ahead of the ask.
+  // Guarded even though what reaches here today is only generated topic labels
+  // (2-4 words), not post text: the cluster/novelty-gate path that embeds raw
+  // post text is currently unreachable (labelMode is forced on in
+  // digest.svelte.ts) but is deliberately parked rather than deleted. If it's
+  // ever switched back on, post text must not start leaving without an ask.
   digestConsent.require('ollama', opts.ollamaUrl)
   const base = (opts.ollamaUrl || DEFAULT_OLLAMA_URL).replace(/\/$/, '')
   let res: Response
