@@ -34,8 +34,9 @@
       </p>
 
       <p>
-        It shows unfiltered content from a public network, so it isn't for under-17s. It's a research
-        project provided as-is, with no warranty — it may break or change.
+        Your account's labels, mutes and blocks are applied here — but it's still a general social
+        feed, so it isn't for under-17s. It's a research project provided as-is, with no warranty:
+        it may break or change.
       </p>
 
       <p class="fine">
