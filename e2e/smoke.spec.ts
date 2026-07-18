@@ -484,7 +484,11 @@ test('per-post label mode tags nodes and groups by topic', async ({ page }) => {
   const captions = await page.locator('.node-caption').count()
   const pills = await page.locator('.topic-node').count()
   expect(captions + pills).toBeGreaterThan(2)
-  expect(await page.locator('.convos > li').count()).toBeGreaterThan(0)
+  // Captions appear WHILE labeling (live token-merge grouping), but the panel's
+  // list only renders once loading finishes — so this has to wait rather than
+  // sample a count. It was racing all along; the Ollama default merely exposed
+  // it, labelFeed running at concurrency 2 where Anthropic ran at 6.
+  await expect(page.locator('.convos > li').first()).toBeVisible({ timeout: 10000 })
 })
 
 test('merge slider re-groups labels without re-labeling', async ({ page }) => {
