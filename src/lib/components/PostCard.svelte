@@ -263,7 +263,9 @@
     <div class="meta">
       <span class="name">{authorName(item)}</span>
       <span class="handle">
-        @{item.post.author.handle}{#if followsYou && !isSelf}<span class="follows-you">follows you</span>{/if}
+        <span class="handle-text">@{item.post.author.handle}</span>{#if followsYou && !isSelf}<span
+            class="follows-you">follows you</span
+          >{/if}
       </span>
     </div>
     {#if !isSelf}
@@ -556,7 +558,7 @@
     margin-bottom: 0.45rem;
   }
   .follow {
-    margin-left: auto;
+    flex: none;
     align-self: center;
     padding: 0.2rem 0.6rem;
     font-size: 0.75rem;
@@ -578,7 +580,7 @@
     font-weight: 500;
   }
   .time {
-    margin-left: auto;
+    flex: none;
     align-self: flex-start;
     color: var(--text-dim);
     font-size: 0.75rem;
@@ -606,9 +608,17 @@
     left: 0;
     z-index: 20;
   }
+  /* The name/handle column absorbs all the slack in the head, so the Follow
+     button and timestamp are the only things against the right edge and land in
+     the same place on every card. Previously .follow and .time BOTH had
+     margin-left:auto, and flex splits free space equally between two auto
+     margins — so the timestamp anchored right correctly but the button floated
+     at "meta's end plus half the slack", drifting up to 45px with how long the
+     author's name happened to be. */
   .meta {
     display: flex;
     flex-direction: column;
+    flex: 1;
     min-width: 0;
   }
   .name {
@@ -621,6 +631,17 @@
     display: flex;
     align-items: center;
     gap: 0.35rem;
+    min-width: 0;
+  }
+  /* The handle is what gives, so the badge never has to. Without this the flex
+     children refuse to shrink, spill out of .handle's own (shrunken) box and
+     paint on top of the Follow button — which is what "follows you" was doing
+     under "Following" on any longish handle. */
+  .handle-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .follows-you {
     padding: 0.05rem 0.3rem;
@@ -630,6 +651,7 @@
     background: color-mix(in srgb, var(--accent) 22%, transparent);
     border-radius: 0.3rem;
     white-space: nowrap;
+    flex: none;
   }
   .text {
     white-space: pre-wrap;
