@@ -1238,7 +1238,7 @@
 >
   {#if settings.cohesion < 0.5}
     <div class="axis y-axis">← quieter · louder →</div>
-    <div class="axis x-axis">← older · newer →</div>
+    <div class="axis x-axis">← last active: older · newer →</div>
   {/if}
   <div class="axis legend"><span class="dot"></span> size = replies</div>
 

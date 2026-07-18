@@ -289,6 +289,36 @@ export function treeTargets(nodes: TreeNode[], box: TreeLayoutBox): TreeTarget[]
     }
   }
 
+  // Anchor each tree by the CONVERSATION, not by its root post. A root is by
+  // definition the oldest post in its thread and often the quietest, so anchoring
+  // on it dragged every thread leftward and let a busy conversation sit low —
+  // while a standalone post kept its true position. Two placement rules meant two
+  // populations on screen (a dense mass of threads up-left, singletons scattered
+  // right) with the newest+quietest corner unreachable: a recent quiet post is
+  // nearly always a reply, hauled back to its root. Summarising the whole subtree
+  // — newest activity on x, peak engagement on y — puts every conversation,
+  // including a conversation of one, under a single rule.
+  const rootUris = [...extent.keys()]
+  const summary = new Map<string, { t: number; y: number }>()
+  for (const u of rootUris) summary.set(u, { t: -Infinity, y: Infinity })
+  for (const n of nodes) {
+    const s = summary.get(nodeRoot.get(n.uri) ?? n.uri)
+    if (!s) continue
+    if (n.timestamp > s.t) s.t = n.timestamp
+    if (n.y < s.y) s.y = n.y // y is 1 - scoreRank, so LOWER means louder
+  }
+  // Rank conversations among conversations. layoutPositions ranks every visible
+  // post, but only these anchors ever consume a rank and they're a biased subset
+  // of them — so a spread that is uniform over posts arrived clumped over the
+  // things actually placed. Re-ranking here restores it by construction.
+  // With a single conversation there is nothing to rank against: keep its own spot.
+  const anchor = new Map<string, { x: number; y: number }>()
+  if (rootUris.length > 1) {
+    const ax = fractionalRanks(rootUris.map((u) => summary.get(u)!.t))
+    const ay = fractionalRanks(rootUris.map((u) => summary.get(u)!.y))
+    rootUris.forEach((u, i) => anchor.set(u, { x: ax[i], y: ay[i] }))
+  }
+
   // Clamp v into [lo, hi]; if the span doesn't fit (lo > hi), centre it.
   const fit = (v: number, lo: number, hi: number) => (lo > hi ? (lo + hi) / 2 : Math.max(lo, Math.min(hi, v)))
   return nodes.map((n) => {
@@ -296,10 +326,13 @@ export function treeTargets(nodes: TreeNode[], box: TreeLayoutBox): TreeTarget[]
     const rootUri = nodeRoot.get(n.uri) ?? n.uri
     const root = byUri.get(rootUri) ?? n
     const e = extent.get(rootUri) ?? { minDx: 0, maxDx: 0, maxDy: 0 }
+    const a = anchor.get(rootUri) ?? { x: root.x, y: root.y }
     // Place the root so its leftmost/rightmost/bottommost descendants stay in
     // bounds, then hang the tree off that fitted root — no per-node edge cramming.
-    const rootX = fit(padX + root.x * innerW, padX - e.minDx, padX + innerW - e.maxDx)
-    const rootY = fit(padTop + root.y * innerH, padTop, padTop + innerH - e.maxDy)
+    // The tree itself is untouched: `o` is a rigid offset from the root, so
+    // changing the anchor translates the whole constellation without deforming it.
+    const rootX = fit(padX + a.x * innerW, padX - e.minDx, padX + innerW - e.maxDx)
+    const rootY = fit(padTop + a.y * innerH, padTop, padTop + innerH - e.maxDy)
     return {
       id: n.uri,
       tx: rootX + o.dx,

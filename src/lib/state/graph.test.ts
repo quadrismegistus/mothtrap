@@ -507,6 +507,66 @@ describe('treeTargets', () => {
     expect(t.tx).toBeCloseTo(250)
     expect(t.ty).toBeCloseTo(750)
   })
+
+  // A root is always the OLDEST post in its thread. Anchoring on it hauled every
+  // conversation back to its opening post's time, so threads piled up on the left
+  // while standalone posts kept their real recency on the right — two placement
+  // rules, two clusters. These pin the single-rule behaviour.
+  it('places a thread by its NEWEST activity, not by when it started', () => {
+    const t = treeTargets(
+      [
+        // An old thread that is still going: its own x-rank says far left.
+        mk('a0', { timestamp: 1, x: 0 }),
+        mk('a1', { timestamp: 100, parent: 'a0', x: 0 }),
+        // A standalone post, newer than a0 but staler than the live reply.
+        mk('b0', { timestamp: 50, x: 1 }),
+      ],
+      box,
+    )
+    const byId = new Map(t.map((x) => [x.id, x]))
+    // Old behaviour: a0 used its own x=0 and sat left of b0 (x=1). Now the live
+    // conversation wins the right-hand side.
+    expect(byId.get('a0')!.tx).toBeGreaterThan(byId.get('b0')!.tx)
+    // …and the reply still hangs directly under its parent — tree undeformed.
+    expect(byId.get('a1')!.tx).toBeCloseTo(byId.get('a0')!.tx)
+    expect(byId.get('a1')!.ty - byId.get('a0')!.ty).toBeCloseTo(Y_UNIT)
+  })
+
+  it('places a thread by its LOUDEST post, not by how quiet the opener was', () => {
+    const t = treeTargets(
+      [
+        mk('a0', { timestamp: 1, y: 1 }), // quietest post on the canvas…
+        mk('a1', { timestamp: 2, parent: 'a0', y: 0 }), // …but it blew up
+        mk('b0', { timestamp: 3, y: 0.5 }),
+      ],
+      box,
+    )
+    const byId = new Map(t.map((x) => [x.id, x]))
+    expect(byId.get('a0')!.ty).toBeLessThan(byId.get('b0')!.ty) // louder ⇒ higher
+  })
+
+  it('spreads conversations across the canvas, not the posts within them', () => {
+    // Three conversations of very different sizes. Anchors should land at the
+    // rank extremes and midpoint regardless of how many posts each contains.
+    const t = treeTargets(
+      [
+        mk('a0', { timestamp: 1 }),
+        mk('a1', { timestamp: 2, parent: 'a0' }),
+        mk('a2', { timestamp: 3, parent: 'a0' }),
+        mk('b0', { timestamp: 10 }),
+        mk('c0', { timestamp: 20 }),
+      ],
+      box,
+    )
+    const byId = new Map(t.map((x) => [x.id, x]))
+    expect(byId.get('b0')!.tx).toBeCloseTo(500) // middle conversation
+    expect(byId.get('c0')!.tx).toBeCloseTo(1000) // newest, hard right
+    // The oldest conversation wants the far left, but it has two replies, so
+    // subtree-fitting nudges its anchor right by exactly half a sibling slot —
+    // putting its LEFTMOST reply on the edge rather than off it.
+    expect(byId.get('a1')!.tx).toBeCloseTo(0)
+    expect(byId.get('a0')!.tx).toBeLessThan(byId.get('b0')!.tx)
+  })
 })
 
 describe('withTopicPills', () => {
