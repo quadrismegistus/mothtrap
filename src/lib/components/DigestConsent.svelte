@@ -36,10 +36,12 @@
       <p class="what">To label your feed, these are sent {cloud ? 'to a third-party AI provider' : 'to the Mothtrap server'}:</p>
       <ul>
         <li>the text of the posts on screen</li>
-        <li><strong>the handles of the people who wrote them</strong></li>
-        <li>for a reply or quote, the post it responds to</li>
+        <li>for a reply or quote, the text of the post it responds to</li>
       </ul>
-      <p class="fine">Each post is sent once; its label is then cached on your device.</p>
+      <p class="fine">
+        <strong>No names or handles</strong> — labelling is a summary of what a post is about, so
+        who wrote it is never sent. Each post is sent once; its label is then cached on your device.
+      </p>
 
       {#if cloud}
         <p class="note">
@@ -75,7 +77,11 @@
     background: rgba(0, 0, 0, 0.55);
     display: grid;
     place-items: center;
-    z-index: 1000;
+    /* Above the other modals (1000), because this one is raised BY them: the
+       Settings view's "Turn on" summons it, and Settings mounts later in
+       App.svelte, so at equal z-index Settings painted over the dialog it had
+       just opened — leaving the way back visible but unclickable. */
+    z-index: 1100;
     padding: 1rem;
   }
   .modal {

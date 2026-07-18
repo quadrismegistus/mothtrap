@@ -1,4 +1,5 @@
 import {
+  AppBskyFeedPost,
   BSKY_LABELER_DID,
   DEFAULT_LABEL_SETTINGS,
   moderatePost,
@@ -156,6 +157,16 @@ class Moderation {
   #muted = new SvelteSet<string>()
   /** did → block record uri; null while the write is still in flight. */
   #blocked = new SvelteMap<string, string | null>()
+  /**
+   * Explicit UN-silencings this session. The overlay used to only ever add
+   * suppression, so un-muting somebody the fetched data still called muted did
+   * nothing until the next refetch — and for a block that was worse than a
+   * delay: the block cover is canReveal:false, so the user's own un-block was
+   * not merely late, it was unhonoured with no way to see the content, above a
+   * menu still offering "Unblock".
+   */
+  #unmuted = new SvelteSet<string>()
+  #unblocked = new SvelteSet<string>()
 
   opts: ModerationOpts = $derived({ userDid: this.#userDid, prefs: this.#prefs })
 
@@ -184,6 +195,30 @@ class Moderation {
     this.#cache.clear()
     this.#muted.clear()
     this.#blocked.clear()
+    this.#unmuted.clear()
+    this.#unblocked.clear()
+  }
+
+  /**
+   * The post as the decision engine should see it.
+   *
+   * An explicit un-mute or un-block has to reach moderatePost, not just the
+   * isMuted/isBlocked helpers: the fetched `viewer` state still says muted or
+   * blocking, so the decision would keep filtering the post on that basis and
+   * the user's own action would appear to do nothing until a refetch.
+   *
+   * `blockedBy` is deliberately NOT cleared — that is their block of you, and
+   * undoing yours doesn't undo theirs.
+   */
+  #subjectOf(item: FeedItem) {
+    const a = item.post.author
+    const unmuted = this.#unmuted.has(a.did)
+    const unblocked = this.#unblocked.has(a.did)
+    if (!unmuted && !unblocked) return item.post
+    const viewer = { ...a.viewer }
+    if (unmuted) delete viewer.muted
+    if (unblocked) delete viewer.blocking
+    return { ...item.post, author: { ...a, viewer } }
   }
 
   decisionFor(item: FeedItem): ModerationDecision {
@@ -192,10 +227,13 @@ class Moderation {
     // uri:cid alone pinned the first (clean) verdict for the whole session and
     // a label arriving later was never honoured. Mothtrap sits open re-polling
     // a feed, so a labeler catching up with a post is the ordinary case.
-    const key = `${item.post.uri}:${item.post.cid}:${labelFingerprint(item)}`
+    const did = item.post.author.did
+    // The un-silenced flags are part of the subject, so they belong in the key.
+    const un = `${this.#unmuted.has(did) ? 'm' : ''}${this.#unblocked.has(did) ? 'b' : ''}`
+    const key = `${item.post.uri}:${item.post.cid}:${labelFingerprint(item)}:${un}`
     let d = this.#cache.get(key)
     if (!d) {
-      d = moderatePost(item.post, this.opts)
+      d = moderatePost(this.#subjectOf(item), this.opts)
       this.#cache.set(key, d)
     }
     return d
@@ -286,22 +324,62 @@ class Moderation {
   // so — silently failing to block someone would be its own kind of harm.
 
   isMuted(actor: Actor): boolean {
+    if (this.#unmuted.has(actor.did)) return false // this session's action wins
     return this.#muted.has(actor.did) || !!actor.viewer?.muted
   }
 
   /** The block record's uri, needed to undo. Undefined when not blocked. */
   blockUri(actor: Actor): string | undefined {
+    if (this.#unblocked.has(actor.did)) return undefined
     const local = this.#blocked.get(actor.did)
     if (local !== undefined) return local ?? undefined
     return actor.viewer?.blocking
   }
 
+  /**
+   * Is this post a reply to somebody you've silenced?
+   *
+   * Covers blocks as well as mutes: a block is the stronger signal, so hiding
+   * replies to muted accounts while keeping replies to blocked ones would be
+   * incoherent.
+   *
+   * An at-uri carries its author's DID (at://did:plc:…/app.bsky.feed.post/rkey),
+   * so this needs no lookup of the parent post — which is what makes it usable
+   * in the feed filter, which runs before any parent has been fetched.
+   */
+  repliesToSilenced(item: FeedItem): boolean {
+    return this.silencedParent(item) !== undefined
+  }
+
+  /**
+   * Which kind of silencing applies to this post's reply-parent, if any.
+   *
+   * Also the answer to a gap in the graph: api/thread.ts keeps only nodes
+   * passing isThreadViewPost, and the server returns a contentless
+   * `#blockedPost` stub for a blocked author — so the ancestor chain simply
+   * stops, and the reply renders as though it were a root. The node already
+   * carries a reply badge, so the user is told "this is a reply" and then shown
+   * nothing it replies to. This says which.
+   */
+  silencedParent(item: FeedItem): 'muted' | 'blocked' | undefined {
+    const rec = item.post.record
+    if (!AppBskyFeedPost.isRecord(rec) || !rec.reply) return undefined
+    const did = rec.reply.parent.uri.split('/')[2]
+    if (!did || !did.startsWith('did:')) return undefined
+    const actor: Actor = { did }
+    if (this.isBlocked(actor)) return 'blocked'
+    if (this.isMuted(actor)) return 'muted'
+    return undefined
+  }
+
   isBlocked(actor: Actor): boolean {
+    if (this.#unblocked.has(actor.did)) return false // this session's action wins
     return this.#blocked.has(actor.did) || !!actor.viewer?.blocking
   }
 
   async mute(actor: Actor) {
-    if (this.#muted.has(actor.did)) return
+    if (this.isMuted(actor)) return
+    this.#unmuted.delete(actor.did)
     this.#muted.add(actor.did)
     try {
       await muteActor(actor.did)
@@ -313,9 +391,11 @@ class Moderation {
 
   async unmute(actor: Actor) {
     const had = this.#muted.delete(actor.did)
+    this.#unmuted.add(actor.did)
     try {
       await unmuteActor(actor.did)
     } catch (err) {
+      this.#unmuted.delete(actor.did)
       if (had) this.#muted.add(actor.did)
       throw err
     }
@@ -323,6 +403,7 @@ class Moderation {
 
   async block(actor: Actor) {
     if (this.#blocked.has(actor.did)) return
+    this.#unblocked.delete(actor.did)
     this.#blocked.set(actor.did, null) // suppress now, learn the uri in a moment
     try {
       const res = await blockActor(actor.did)
@@ -349,6 +430,7 @@ class Moderation {
   async unblock(actor: Actor) {
     const uri = this.blockUri(actor)
     const prev = this.#blocked.get(actor.did)
+    this.#unblocked.add(actor.did)
     // Delete FIRST: an in-flight block() checks for this entry after its await
     // and treats its absence as "the user changed their mind", undoing the
     // record it just created.
@@ -357,6 +439,7 @@ class Moderation {
     try {
       await unblockActor(uri)
     } catch (err) {
+      this.#unblocked.delete(actor.did)
       if (prev !== undefined) this.#blocked.set(actor.did, prev)
       throw err
     }

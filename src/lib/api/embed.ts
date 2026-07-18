@@ -14,12 +14,6 @@ import { localEmbed } from './localEmbed'
  * which meant the text left the machine; it is now the same model running in a
  * worker, so the vectors are the same 384-dim space and nothing is sent.
  */
-export const DEFAULT_EMBED_MODEL = 'all-MiniLM-L6-v2'
-
-export interface EmbedOpts {
-  ollamaUrl?: string
-  model?: string
-}
 
 export function norm(v: number[]): number[] {
   let n = 0
@@ -80,8 +74,7 @@ function demoEmbed(text: string, d = 32): number[] {
  * privacy regression triggered by a flaky download, which is not a trade anyone
  * opted into.
  */
-export async function embedTexts(texts: string[], opts: EmbedOpts = {}): Promise<number[][]> {
-  void opts // ollamaUrl is vestigial now; kept so callers need no change
+export async function embedTexts(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return []
   if (isDemo()) return texts.map((t) => demoEmbed(t))
   const out = (await localEmbed(texts)).map(norm)
