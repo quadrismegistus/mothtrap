@@ -1,0 +1,74 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import * as platform from '../api/platform'
+import { terms, TERMS_VERSION } from './terms.svelte'
+
+vi.mock('../api/platform', () => ({ isNative: vi.fn(() => false) }))
+
+// vitest runs in `node`, which has no localStorage, so every read/write in
+// terms.svelte.ts hit its catch and the persistence path — the actual App
+// Review evidence — was never executed by a test.
+const store = new Map<string, string>()
+vi.stubGlobal('localStorage', {
+  getItem: (k: string) => store.get(k) ?? null,
+  setItem: (k: string, v: string) => void store.set(k, v),
+  removeItem: (k: string) => void store.delete(k),
+})
+
+beforeEach(() => terms.reset())
+afterEach(() => vi.mocked(platform.isNative).mockReturnValue(false))
+
+describe('terms gate', () => {
+  it('never gates the web app', () => {
+    // An agreement wall in front of someone's own research instrument is pure
+    // friction: the terms are published either way, and mothtrap.blue has never
+    // been the thing under review.
+    vi.mocked(platform.isNative).mockReturnValue(false)
+    expect(terms.required).toBe(false)
+    expect(terms.accepted).toBe(false) // …though it is still unaccepted
+  })
+
+  it('gates the native build until agreed', () => {
+    vi.mocked(platform.isNative).mockReturnValue(true)
+    expect(terms.required).toBe(true)
+    terms.accept()
+    expect(terms.required).toBe(false)
+    expect(terms.accepted).toBe(true)
+  })
+
+  it('re-asks when the terms change materially', () => {
+    // Agreement to version 1 is not agreement to version 2. Relying on it would
+    // mean claiming consent to a document that no longer exists.
+    vi.mocked(platform.isNative).mockReturnValue(true)
+    terms.accept()
+    expect(terms.required).toBe(false)
+    terms.acceptedVersion = TERMS_VERSION - 1 // as if the version were bumped
+    expect(terms.required).toBe(true)
+  })
+
+  it('can be withdrawn, putting the gate back', () => {
+    vi.mocked(platform.isNative).mockReturnValue(true)
+    terms.accept()
+    terms.reset()
+    expect(terms.required).toBe(true)
+  })
+
+  it('actually persists the agreement', () => {
+    vi.mocked(platform.isNative).mockReturnValue(true)
+    terms.accept()
+    expect(store.get('mothtrap.termsAccepted')).toBe(String(TERMS_VERSION))
+    terms.reset()
+    expect(store.has('mothtrap.termsAccepted')).toBe(false)
+  })
+
+  it('clamps a forged version so it cannot defeat future bumps', async () => {
+    // "999" would otherwise satisfy every future TERMS_VERSION for ever.
+    store.set('mothtrap.termsAccepted', '999')
+    vi.resetModules()
+    const fresh = await import('./terms.svelte')
+    expect(fresh.terms.acceptedVersion).toBe(TERMS_VERSION)
+    store.set('mothtrap.termsAccepted', 'nonsense')
+    vi.resetModules()
+    const bad = await import('./terms.svelte')
+    expect(bad.terms.acceptedVersion).toBe(0)
+  })
+})

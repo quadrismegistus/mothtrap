@@ -4,6 +4,8 @@
   import { digestConsent, destinationOf } from '../state/digestConsent.svelte'
   import { read } from '../state/read.svelte'
   import { session } from '../state/session.svelte'
+  import { terms } from '../state/terms.svelte'
+  import { isNative } from '../api/platform'
 
   interface Props {
     onclose: () => void
@@ -163,10 +165,26 @@
       </div>
     </section>
 
+    {#if isNative()}
+      <section>
+        <h3>Terms</h3>
+        <p class="blurb">
+          You agreed to version {terms.acceptedVersion} of the
+          <a href="{base}terms.html" target="_blank" rel="noreferrer">terms of use</a>. Withdrawing
+          takes effect immediately: the app returns to the agreement screen.
+        </p>
+        <div class="actions">
+          <button class="danger" onclick={() => terms.reset()}>Withdraw agreement</button>
+        </div>
+      </section>
+    {/if}
+
     <footer>
       <a href="{base}contact.html" target="_blank" rel="noreferrer">Contact</a>
       <span aria-hidden="true">·</span>
       <a href="{base}privacy.html" target="_blank" rel="noreferrer">Privacy</a>
+      <span aria-hidden="true">·</span>
+      <a href="{base}terms.html" target="_blank" rel="noreferrer">Terms</a>
     </footer>
   </div>
 </div>

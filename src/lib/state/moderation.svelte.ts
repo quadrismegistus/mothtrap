@@ -84,8 +84,12 @@ const BUILTIN_LABEL_NAMES: Record<string, string> = {
 
 /**
  * Identity of the labels currently on a post, for the decision cache key.
- * Sorted so ordering churn from the API can't invalidate a good entry, and
- * `neg` included because a retraction is as much a change as an application.
+ * Sorted so ordering churn from the API can't invalidate a good entry. `neg` is
+ * folded in to force a cache miss when a retraction arrives — but only that:
+ * moderatePost never reads `label.neg` (it goes straight from `val` to the
+ * label def), so a negated label still decides as if applied. Harmless today
+ * because the AppView resolves negations before serving, and NOT something to
+ * rely on if that ever changes.
  */
 function labelFingerprint(item: FeedItem): string {
   const all = [...(item.post.labels ?? []), ...(item.post.author.labels ?? [])]
@@ -144,6 +148,9 @@ class Moderation {
    * edited post re-decides. Plain Map, not reactive — cleared whenever the
    * inputs it was computed under change. */
   #cache = new Map<string, ModerationDecision>()
+  /** Bound on #cache. A tab left open all day accumulates one entry per post,
+   * and now per distinct label-set per post, none of which were ever evicted. */
+  #CACHE_MAX = 4000
   /**
    * Optimistic overlay for mutes and blocks made THIS session. A decision comes
    * from the post's own `viewer` state, which is frozen at fetch time, so
@@ -167,6 +174,20 @@ class Moderation {
    */
   #unmuted = new SvelteSet<string>()
   #unblocked = new SvelteSet<string>()
+  /**
+   * Which in-flight call currently owns each actor's block state.
+   *
+   * Presence checks aren't enough: block → unblock → block inside one round
+   * trip left the first call seeing "an entry exists" and skipping its undo,
+   * so its record was overwritten in the map and orphaned on the network
+   * forever. Three clicks in a round trip is ordinary on a slow connection, and
+   * the ⋯ menu doesn't disable while a write is in flight. A token means a call
+   * only acts on the state if it is still the one that owns it.
+   */
+  #blockGen = new SvelteMap<string, number>()
+  #gen = 0
+  /** Muted posts whose mute layer has been dismissed — see reveal(). */
+  #revealedMute = new SvelteSet<string>()
 
   opts: ModerationOpts = $derived({ userDid: this.#userDid, prefs: this.#prefs })
 
@@ -197,6 +218,8 @@ class Moderation {
     this.#blocked.clear()
     this.#unmuted.clear()
     this.#unblocked.clear()
+    this.#blockGen.clear()
+    this.#revealedMute.clear()
   }
 
   /**
@@ -234,6 +257,14 @@ class Moderation {
     let d = this.#cache.get(key)
     if (!d) {
       d = moderatePost(this.#subjectOf(item), this.opts)
+      // Evict oldest-first (Map preserves insertion order) rather than growing
+      // without limit. Re-deciding a post is cheap; leaking is not.
+      if (this.#cache.size >= this.#CACHE_MAX) {
+        for (const k of this.#cache.keys()) {
+          if (this.#cache.size < this.#CACHE_MAX) break
+          this.#cache.delete(k)
+        }
+      }
       this.#cache.set(key, d)
     }
     return d
@@ -291,7 +322,11 @@ class Moderation {
     // the hard boundary, and it's handled above.
     if (this.#revealed.has(item.post.uri) && canReveal) return NO_COVER
 
-    if (this.isMuted(author)) {
+    // Reveal one LAYER at a time. A muted author's post can also carry a label,
+    // and the mute cover is shown first — so a single click used to satisfy
+    // both, dismissing a content warning the user was never shown. Clearing the
+    // mute here lets the label cover take its turn.
+    if (this.isMuted(author) && !this.#revealedMute.has(item.post.uri)) {
       return { blur: true, media: false, reason: 'Muted account', canReveal }
     }
     if (list.filter || list.blur) {
@@ -308,10 +343,23 @@ class Moderation {
     return NO_COVER
   }
 
-  /** Uncover one post for this session. No-op for no-override causes. */
+  /**
+   * Uncover one post for this session, one LAYER per call. No-op for
+   * no-override causes.
+   *
+   * A post can be covered by more than one thing at once — a mute AND a label.
+   * Dismissing the mute must not silently dismiss a warning that was sitting
+   * behind it and never rendered, so this clears the layer currently on screen
+   * and leaves the next one to be answered on its own.
+   */
   reveal(item: FeedItem) {
     if (!this.cover(item).canReveal) return
-    this.#revealed.add(item.post.uri)
+    const uri = item.post.uri
+    if (this.isMuted(item.post.author) && !this.#revealedMute.has(uri)) {
+      this.#revealedMute.add(uri)
+      return
+    }
+    this.#revealed.add(uri)
   }
 
   isRevealed(uri: string): boolean {
@@ -379,12 +427,16 @@ class Moderation {
 
   async mute(actor: Actor) {
     if (this.isMuted(actor)) return
-    this.#unmuted.delete(actor.did)
+    // Remember whether we consumed an un-mute: the rollback has to put it back,
+    // or a failed re-mute leaves the author muted here while the server has
+    // them unmuted.
+    const hadUnmuted = this.#unmuted.delete(actor.did)
     this.#muted.add(actor.did)
     try {
       await muteActor(actor.did)
     } catch (err) {
       this.#muted.delete(actor.did)
+      if (hadUnmuted) this.#unmuted.add(actor.did)
       throw err
     }
   }
@@ -402,45 +454,56 @@ class Moderation {
   }
 
   async block(actor: Actor) {
-    if (this.#blocked.has(actor.did)) return
-    this.#unblocked.delete(actor.did)
+    if (this.isBlocked(actor)) return
+    const gen = ++this.#gen
+    this.#blockGen.set(actor.did, gen)
+    const hadUnblocked = this.#unblocked.delete(actor.did)
     this.#blocked.set(actor.did, null) // suppress now, learn the uri in a moment
     try {
       const res = await blockActor(actor.did)
-      // The user can unblock while this is in flight — the menu already reads
-      // "Unblock", because isBlocked() is optimistically true. If they did,
-      // the overlay entry is gone, and writing the uri back would silently
-      // re-block them AND leave a public app.bsky.graph.block record they
-      // believe they removed. Undo it instead.
-      if (!this.#blocked.has(actor.did)) {
+      if (this.#blockGen.get(actor.did) !== gen) {
+        // Superseded while in flight — the user unblocked, or a newer block owns
+        // the state and wrote its own record. Either way this one must go, or it
+        // stays live on the network with nothing referring to it.
         await unblockActor(res.uri).catch(() => {
-          // Best effort. Re-record it so the UI stops claiming they're
-          // unblocked when the record is demonstrably still there.
-          this.#blocked.set(actor.did, res.uri)
+          // The undo itself failed, so the record IS live. If nothing newer has
+          // claimed the state, say so rather than showing "not blocked" over a
+          // real block: this makes the Unblock button work on the true uri.
+          if (!this.#blocked.has(actor.did)) {
+            this.#unblocked.delete(actor.did)
+            this.#blocked.set(actor.did, res.uri)
+          }
         })
         return
       }
       this.#blocked.set(actor.did, res.uri)
     } catch (err) {
-      this.#blocked.delete(actor.did)
+      if (this.#blockGen.get(actor.did) === gen) {
+        this.#blocked.delete(actor.did)
+        // Restore the un-block this call consumed. Without it a failed re-block
+        // reads as blocked off the stale fetch-time viewer.blocking, sealing the
+        // content with canReveal:false against a record already deleted.
+        if (hadUnblocked) this.#unblocked.add(actor.did)
+      }
       throw err
     }
   }
 
   async unblock(actor: Actor) {
     const uri = this.blockUri(actor)
+    const gen = ++this.#gen
+    this.#blockGen.set(actor.did, gen)
     const prev = this.#blocked.get(actor.did)
-    this.#unblocked.add(actor.did)
-    // Delete FIRST: an in-flight block() checks for this entry after its await
-    // and treats its absence as "the user changed their mind", undoing the
-    // record it just created.
     this.#blocked.delete(actor.did)
-    if (!uri) return // in-flight (uri not known yet — block() will undo it)
+    this.#unblocked.add(actor.did)
+    if (!uri) return // block still in flight; its gen check will undo it
     try {
       await unblockActor(uri)
     } catch (err) {
-      this.#unblocked.delete(actor.did)
-      if (prev !== undefined) this.#blocked.set(actor.did, prev)
+      if (this.#blockGen.get(actor.did) === gen) {
+        this.#unblocked.delete(actor.did)
+        if (prev !== undefined) this.#blocked.set(actor.did, prev)
+      }
       throw err
     }
   }

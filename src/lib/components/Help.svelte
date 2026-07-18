@@ -88,6 +88,8 @@
       <a href="{base}contact.html" target="_blank" rel="noreferrer">Contact</a>
       <span aria-hidden="true">·</span>
       <a href="{base}privacy.html" target="_blank" rel="noreferrer">Privacy</a>
+      <span aria-hidden="true">·</span>
+      <a href="{base}terms.html" target="_blank" rel="noreferrer">Terms</a>
     </section>
     </div>
   </div>

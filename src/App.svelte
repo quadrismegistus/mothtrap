@@ -8,6 +8,8 @@
   import Help from './lib/components/Help.svelte'
   import ReportDialog from './lib/components/ReportDialog.svelte'
   import Settings from './lib/components/Settings.svelte'
+  import Terms from './lib/components/Terms.svelte'
+  import { terms } from './lib/state/terms.svelte'
   import DigestConsent from './lib/components/DigestConsent.svelte'
 
   let showHelp = $state(false)
@@ -25,7 +27,11 @@
   })
 </script>
 
-{#if session.status === 'loading'}
+{#if terms.required}
+  <!-- Before anything else, including Login: agreement should come before
+       someone types a password into the app, not after. -->
+  <Terms />
+{:else if session.status === 'loading'}
   <div class="center">Loading…</div>
 {:else if session.status === 'logged-out'}
   <Login />
