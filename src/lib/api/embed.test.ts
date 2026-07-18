@@ -1,5 +1,11 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { centroid, cosine, embedTexts, noveltyGate } from './embed'
+import { digestConsent } from '../state/digestConsent.svelte'
+
+// These cover the transport, not the privacy gate — the gate has its own
+// tests in state/digestConsent.test.ts. Consent it once so the network
+// paths below are reachable.
+beforeEach(() => digestConsent.grant())
 
 describe('centroid', () => {
   it('averages equal-dimension unit vectors', () => {

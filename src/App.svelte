@@ -7,6 +7,7 @@
   import Compose from './lib/components/Compose.svelte'
   import Help from './lib/components/Help.svelte'
   import ReportDialog from './lib/components/ReportDialog.svelte'
+  import DigestConsent from './lib/components/DigestConsent.svelte'
 
   let showHelp = $state(false)
 
@@ -59,6 +60,9 @@
   <!-- Self-gating on the `report` store, like Compose: the post card that opens
        it is a hover affordance and closes the moment the pointer leaves. -->
   <ReportDialog />
+  <!-- Raised by the network guard the first time a digest request would leave
+       the device, so the ask lands in context rather than on the login screen. -->
+  <DigestConsent />
   {#if showHelp}
     <Help onclose={() => (showHelp = false)} />
   {/if}

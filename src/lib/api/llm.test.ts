@@ -1,6 +1,12 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { summarizeFeed, exemplars, contextFor, extractJson, labelFeed, type Conversation } from './llm'
 import { mkPost } from '../testing'
+import { digestConsent } from '../state/digestConsent.svelte'
+
+// These cover the transport, not the privacy gate — the gate has its own
+// tests in state/digestConsent.test.ts. Consent it once so the network
+// paths below are reachable.
+beforeEach(() => digestConsent.grant())
 
 function ollamaText(text: string) {
   return {

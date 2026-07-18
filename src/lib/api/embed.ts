@@ -1,4 +1,5 @@
 import { isDemo } from './demo'
+import { digestConsent } from '../state/digestConsent.svelte'
 import { DEFAULT_OLLAMA_URL } from './llm'
 
 /**
@@ -66,6 +67,9 @@ function demoEmbed(text: string, d = 32): number[] {
 export async function embedTexts(texts: string[], opts: EmbedOpts = {}): Promise<number[][]> {
   if (texts.length === 0) return []
   if (isDemo()) return texts.map((t) => demoEmbed(t))
+  // Embeddings are the FIRST thing the engine sends — before any LLM call — so
+  // the gate has to cover them too, or post text would leave ahead of the ask.
+  digestConsent.require('ollama', opts.ollamaUrl)
   const base = (opts.ollamaUrl || DEFAULT_OLLAMA_URL).replace(/\/$/, '')
   let res: Response
   try {

@@ -11,6 +11,7 @@ import {
 } from '../api/llm'
 import { DEFAULT_MERGE_THRESHOLD, groupByEmbedding, groupByLabel } from '../api/labelGroup'
 import { embedTexts } from '../api/embed'
+import { ConsentRequired } from './digestConsent.svelte'
 import type { FeedItem } from '../api/timeline'
 import { DigestEngine } from './digestEngine.svelte'
 import { archive } from './archive'
@@ -265,7 +266,13 @@ class DigestState {
       }
       this.ranAt = Date.now()
     } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Summary failed'
+      // A blocked digest isn't a failure — the consent dialog is up instead.
+      this.error =
+        err instanceof ConsentRequired
+          ? undefined
+          : err instanceof Error
+            ? err.message
+            : 'Summary failed'
     } finally {
       this.loading = false
       this.streamText = ''
