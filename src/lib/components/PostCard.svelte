@@ -108,6 +108,10 @@
   // you need to be able to see whose post this is, and act on it, precisely
   // when it's the kind of post you'd want to act on.
   const cover = $derived(moderation.cover(item))
+  /** A reply whose parent we will never draw: the server sends a contentless
+   * stub for a blocked author, so the chain stops dead and the post looks like
+   * a root. Say why rather than leaving a hole. */
+  const silencedParent = $derived(moderation.silencedParent(item))
 
   function quoteUrl(q: QuotedPost): string {
     return `https://bsky.app/profile/${q.handle}/post/${q.uri.split('/').pop()}`
@@ -241,6 +245,13 @@
     {:else}
       <div class="repost">🧭 {context}</div>
     {/if}
+  {/if}
+  {#if silencedParent}
+    <p class="silenced-parent">
+      ↩ Replying to an account you've {silencedParent}.{silencedParent === 'blocked'
+        ? " Their post can't be shown."
+        : ''}
+    </p>
   {/if}
   <div class="head">
     <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -673,6 +684,15 @@
     border-radius: 0.3rem;
     white-space: nowrap;
     flex: none;
+  }
+  .silenced-parent {
+    margin: 0 0 0.4rem;
+    padding: 0.3rem 0.45rem;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    background: var(--bg);
+    border: 1px dashed var(--border);
+    border-radius: 6px;
   }
   .text {
     white-space: pre-wrap;

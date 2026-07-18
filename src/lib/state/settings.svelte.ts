@@ -20,6 +20,7 @@ interface Persisted {
   curvedEdges?: boolean
   showReposts?: boolean
   followsOnly?: boolean
+  hideMutedReplies?: boolean
   debugMode?: boolean
 }
 
@@ -38,6 +39,7 @@ export const DEFAULTS = {
   curvedEdges: false,
   showReposts: true,
   followsOnly: false,
+  hideMutedReplies: false,
   debugMode: false,
 }
 
@@ -55,6 +57,7 @@ const V1_DEFAULTS: Record<string, unknown> = {
   curvedEdges: true,
   showReposts: true,
   followsOnly: false,
+  hideMutedReplies: false,
   debugMode: false,
 }
 
@@ -116,6 +119,7 @@ class Settings {
   curvedEdges = $state(DEFAULTS.curvedEdges)
   showReposts = $state(DEFAULTS.showReposts)
   followsOnly = $state(DEFAULTS.followsOnly)
+  hideMutedReplies = $state(DEFAULTS.hideMutedReplies)
   debugMode = $state(DEFAULTS.debugMode)
 
   constructor() {
@@ -135,6 +139,7 @@ class Settings {
     if (typeof p.curvedEdges === 'boolean') this.curvedEdges = p.curvedEdges
     if (typeof p.showReposts === 'boolean') this.showReposts = p.showReposts
     if (typeof p.followsOnly === 'boolean') this.followsOnly = p.followsOnly
+    if (typeof p.hideMutedReplies === 'boolean') this.hideMutedReplies = p.hideMutedReplies
     if (typeof p.debugMode === 'boolean' && debugAllowed) this.debugMode = p.debugMode
 
     if (typeof localStorage !== 'undefined') {
@@ -154,6 +159,8 @@ class Settings {
           if (this.curvedEdges !== DEFAULTS.curvedEdges) data.curvedEdges = this.curvedEdges
           if (this.showReposts !== DEFAULTS.showReposts) data.showReposts = this.showReposts
           if (this.followsOnly !== DEFAULTS.followsOnly) data.followsOnly = this.followsOnly
+          if (this.hideMutedReplies !== DEFAULTS.hideMutedReplies)
+            data.hideMutedReplies = this.hideMutedReplies
           if (this.debugMode !== DEFAULTS.debugMode) data.debugMode = this.debugMode
           localStorage.setItem(KEY, JSON.stringify(data))
         })

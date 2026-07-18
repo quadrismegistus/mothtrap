@@ -114,6 +114,12 @@
       // there it stays (covered, not dropped) — deleting an ancestor would
       // tear a hole in the conversation. See state/moderation.svelte.ts.
       if (moderation.hidden(i)) return false
+      // Opt-in: a muted account's own posts are always gone, but by default a
+      // friend's reply to them still shows (with the muted parent covered).
+      // Turn this on and the reply goes too — muting someone you find
+      // exhausting doesn't help much if five people you follow are arguing
+      // with them in your feed.
+      if (settings.hideMutedReplies && moderation.repliesToSilenced(i)) return false
       const rp = reposterProfile(i)
       if (rp && !settings.showReposts) return false
       // Pruning: unfollowing takes effect immediately. A repost goes when its
@@ -1460,6 +1466,14 @@
           <span class="val"></span>
         </div>
         <p class="hint">Hide feed posts from accounts you don't follow (Bluesky sometimes serves them).</p>
+        <div class="row">
+          <span class="label">Hide muted replies</span>
+          <input type="checkbox" bind:checked={settings.hideMutedReplies} />
+          <span class="val"></span>
+        </div>
+        <p class="hint">
+          Also hide replies TO accounts you've muted or blocked, not just their own posts.
+        </p>
 
         {#if debugAllowed}
           <div class="row">

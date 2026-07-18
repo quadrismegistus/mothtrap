@@ -233,3 +233,45 @@ describe('moderation actions', () => {
     expect(moderation.isBlocked(item.post.author)).toBe(false)
   })
 })
+
+describe('replies to silenced accounts', () => {
+  const reply = (parentDid: string): FeedItem =>
+    ({
+      post: {
+        uri: 'at://did:plc:me/app.bsky.feed.post/r1',
+        cid: 'cr1',
+        author: { did: 'did:plc:friend', handle: 'friend.test', viewer: {} },
+        record: {
+          $type: 'app.bsky.feed.post',
+          text: 'strong disagree',
+          createdAt: AT,
+          reply: {
+            root: { uri: `at://${parentDid}/app.bsky.feed.post/p1`, cid: 'cp1' },
+            parent: { uri: `at://${parentDid}/app.bsky.feed.post/p1`, cid: 'cp1' },
+          },
+        },
+        indexedAt: AT,
+      },
+    }) as unknown as FeedItem
+
+  it('reads the parent author out of the at-uri, with no lookup', async () => {
+    const r = reply('did:plc:loud')
+    expect(moderation.repliesToSilenced(r)).toBe(false)
+    // The feed filter runs before any parent is fetched, so this must work from
+    // the uri alone.
+    await moderation.mute({ did: 'did:plc:loud' })
+    expect(moderation.repliesToSilenced(r)).toBe(true)
+  })
+
+  it('covers blocks too — the stronger signal cannot be the weaker filter', async () => {
+    const r = reply('did:plc:blocked')
+    await moderation.block({ did: 'did:plc:blocked' })
+    expect(moderation.repliesToSilenced(r)).toBe(true)
+  })
+
+  it('ignores non-replies and unparseable parents', () => {
+    expect(moderation.repliesToSilenced(makeItem())).toBe(false) // not a reply
+    const weird = reply('not-a-did')
+    expect(moderation.repliesToSilenced(weird)).toBe(false)
+  })
+})

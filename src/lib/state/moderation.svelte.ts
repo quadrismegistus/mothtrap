@@ -1,4 +1,5 @@
 import {
+  AppBskyFeedPost,
   BSKY_LABELER_DID,
   DEFAULT_LABEL_SETTINGS,
   moderatePost,
@@ -294,6 +295,42 @@ class Moderation {
     const local = this.#blocked.get(actor.did)
     if (local !== undefined) return local ?? undefined
     return actor.viewer?.blocking
+  }
+
+  /**
+   * Is this post a reply to somebody you've silenced?
+   *
+   * Covers blocks as well as mutes: a block is the stronger signal, so hiding
+   * replies to muted accounts while keeping replies to blocked ones would be
+   * incoherent.
+   *
+   * An at-uri carries its author's DID (at://did:plc:…/app.bsky.feed.post/rkey),
+   * so this needs no lookup of the parent post — which is what makes it usable
+   * in the feed filter, which runs before any parent has been fetched.
+   */
+  repliesToSilenced(item: FeedItem): boolean {
+    return this.silencedParent(item) !== undefined
+  }
+
+  /**
+   * Which kind of silencing applies to this post's reply-parent, if any.
+   *
+   * Also the answer to a gap in the graph: api/thread.ts keeps only nodes
+   * passing isThreadViewPost, and the server returns a contentless
+   * `#blockedPost` stub for a blocked author — so the ancestor chain simply
+   * stops, and the reply renders as though it were a root. The node already
+   * carries a reply badge, so the user is told "this is a reply" and then shown
+   * nothing it replies to. This says which.
+   */
+  silencedParent(item: FeedItem): 'muted' | 'blocked' | undefined {
+    const rec = item.post.record
+    if (!AppBskyFeedPost.isRecord(rec) || !rec.reply) return undefined
+    const did = rec.reply.parent.uri.split('/')[2]
+    if (!did || !did.startsWith('did:')) return undefined
+    const actor: Actor = { did }
+    if (this.isBlocked(actor)) return 'blocked'
+    if (this.isMuted(actor)) return 'muted'
+    return undefined
   }
 
   isBlocked(actor: Actor): boolean {
