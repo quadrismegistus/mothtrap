@@ -97,8 +97,11 @@
       </ul>
       <p>
         It is sent to generate short topic labels, is processed in memory to answer that request, and
-        is not stored, logged for analysis, used for training, or passed to any third party. The
-        model is self-hosted — nothing goes to a commercial AI provider. Short text embeddings of the
+        is then gone. Neither the web server nor the model service records the <em>content</em> of
+        these requests: the web server logs only the usual line (time, IP, and the path requested)
+        and the model service logs only that a request happened and how long it took. Nothing is
+        retained for analysis, used for training, or passed to any third party. The model is
+        self-hosted — nothing goes to a commercial AI provider. Short text embeddings of the
         generated labels are computed the same way, to merge near-duplicate topics.
       </p>
       <p>
@@ -128,9 +131,10 @@
         <li>No accounts, so nothing to profile you with.</li>
       </ul>
       <p>
-        Our web server keeps ordinary short-lived request logs (IP address, time, and the file
-        requested), as essentially every web server does. These are used only to keep the site
-        running and are not connected to any Bluesky identity.
+        Our web server keeps ordinary request logs — IP address, time, and the file requested, as
+        essentially every web server does. They are rotated daily and kept for 14 days, are used only
+        to keep the site running, record no request content, and are not connected to any Bluesky
+        identity.
       </p>
 
       <h2>Your control</h2>
