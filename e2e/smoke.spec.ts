@@ -682,3 +682,24 @@ test('settings view exposes data controls and the consent toggle', async ({ page
   await page.keyboard.press('Escape')
   await expect(dlg).toHaveCount(0)
 })
+
+test('the terms gate stays out of the way on the web', async ({ page }) => {
+  // Native-only by design. If this ever fails, the web app has grown an
+  // agreement wall in front of it, which is exactly what we scoped out.
+  await graphReady(page)
+  await expect(page.locator('[aria-label="Terms of use"]')).toHaveCount(0)
+  await expect(page.locator('button.node').first()).toBeVisible()
+
+  // The terms are still published and reachable, gate or no gate.
+  const res = await page.request.get('/terms.html')
+  expect(res.ok()).toBeTruthy()
+  const body = await res.text()
+  expect(body).toMatch(/no tolerance/i) // the clause review looks for
+  expect(body).toContain('contact@mothtrap.blue')
+
+  await page.locator('.help').click()
+  await expect(page.locator('.modal .legal').getByRole('link', { name: 'Terms' })).toHaveAttribute(
+    'href',
+    /terms\.html$/,
+  )
+})
