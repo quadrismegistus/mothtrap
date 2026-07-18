@@ -139,19 +139,31 @@
    * Fixed also needs a flip: opening upward near the top of the screen puts the
    * menu under the topbar, which eats the pointer events.
    */
-  const MORE_MENU_H = 190
-  let moreMenuUp = $state(true)
-  let moreMenuPos = $state({ left: 0, top: 0 })
+  /** Keep the menu clear of the topbar, which eats pointer events under it. */
+  const TOPBAR_SAFE = 56
+  let moreAnchor = $state<{ left: number; top: number; bottom: number } | null>(null)
+  /** MEASURED, not assumed. This was a hardcoded 190px for a four-item menu, so
+   * adding a fifth would have silently broken the flip and put items back under
+   * the topbar. Binding the rendered height means it self-corrects for any
+   * number of items — on the first frame the height is 0, so it opens upward
+   * and immediately re-evaluates once measured. */
+  let moreMenuH = $state(0)
+  const moreMenuUp = $derived(!moreAnchor || moreAnchor.top - moreMenuH - 6 > TOPBAR_SAFE)
+  const moreMenuPos = $derived(
+    moreAnchor
+      ? { left: moreAnchor.left, top: moreMenuUp ? moreAnchor.top - 6 : moreAnchor.bottom + 6 }
+      : { left: 0, top: 0 },
+  )
   function toggleMore(e: MouseEvent, uri: string) {
     if (moreMenuFor === uri) {
       moreMenuFor = null
       return
     }
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-    moreMenuUp = r.top > MORE_MENU_H + 8
-    moreMenuPos = { left: r.left + r.width / 2, top: moreMenuUp ? r.top - 6 : r.bottom + 6 }
+    moreAnchor = { left: r.left + r.width / 2, top: r.top, bottom: r.bottom }
     moreMenuFor = uri
   }
+
   const muted = $derived(moderation.isMuted(item.post.author))
   const blocked = $derived(moderation.isBlocked(item.post.author))
   /** Mute and block are fire-and-forget from the card's point of view, but a
@@ -494,6 +506,7 @@
         <div
           class="menu floating"
           class:up={moreMenuUp}
+          bind:clientHeight={moreMenuH}
           style="left: {moreMenuPos.left}px; top: {moreMenuPos.top}px;"
         >
           <button

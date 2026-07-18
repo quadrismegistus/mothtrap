@@ -192,10 +192,7 @@ export class DigestEngine {
     this.error = undefined
     try {
       this.phase = 'embedding'
-      const vecs = await embedTexts(
-        fresh.map(textOf),
-        { ollamaUrl: opts.ollamaUrl },
-      )
+      const vecs = await embedTexts(fresh.map(textOf))
       // Cache vectors up front (needed to compute centroids), but DON'T mark the
       // posts as seen yet — that happens only after a path below succeeds, so a
       // failing LLM call leaves them to be re-ingested rather than silently

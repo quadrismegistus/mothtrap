@@ -381,7 +381,7 @@ class DigestState {
     const need = labels.filter((l) => !this.#labelVecs.has(l))
     try {
       if (need.length) {
-        const vecs = await embedTexts(need, { ollamaUrl: this.ollamaUrl })
+        const vecs = await embedTexts(need)
         need.forEach((l, i) => vecs[i] && this.#labelVecs.set(l, vecs[i]))
       }
       this.digest = groupByEmbedding(posts, this.#labelVecs, this.mergeThreshold)

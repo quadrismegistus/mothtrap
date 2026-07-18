@@ -65,10 +65,20 @@ describe('moderation', () => {
     expect(moderation.hidden(makeItem({ labels: ['!hide'] }))).toBe(true)
   })
 
-  // The load-bearing case for the graph. A muted author's post is filtered from
-  // the feed, but can still be pulled in as somebody's reply parent — and there
-  // it must come back COVERED. Judged in atproto's `contentView` context it
-  // would come back in the clear, which is why cover() judges as a list.
+  // The load-bearing case for the graph, and it has to be a LABEL to test it.
+  // A mute short-circuits cover() before the decision is consulted, so a muted
+  // author proves nothing about contentList vs contentView. A porn label does:
+  // contentList reports filter=1/blur=0 (→ a full cover), while contentView
+  // reports filter=0/blur=0 and would fall through to a MEDIA-only cover,
+  // leaving the post's text on screen.
+  it('judges covers as a list, not as an opened post page', () => {
+    const item = makeItem({ labels: ['porn'] })
+    const c = moderation.cover(item)
+    expect(c.blur).toBe(true)
+    expect(c.media).toBe(false) // contentView would give media-only here
+    expect(c.canReveal).toBe(false)
+  })
+
   it('covers a muted author pulled in as context, not just hides them', () => {
     const item = makeItem({ viewer: { muted: true } })
     expect(moderation.hidden(item)).toBe(true)
@@ -273,5 +283,33 @@ describe('replies to silenced accounts', () => {
     expect(moderation.repliesToSilenced(makeItem())).toBe(false) // not a reply
     const weird = reply('not-a-did')
     expect(moderation.repliesToSilenced(weird)).toBe(false)
+  })
+})
+
+describe('un-silencing takes effect immediately', () => {
+  it('un-muting an author the FEED still calls muted works at once', async () => {
+    // The overlay only ever added suppression, so this used to need a refetch.
+    const item = makeItem({ viewer: { muted: true } })
+    expect(moderation.hidden(item)).toBe(true)
+    await moderation.unmute(item.post.author)
+    expect(moderation.isMuted(item.post.author)).toBe(false)
+    expect(moderation.hidden(item)).toBe(false)
+  })
+
+  it('un-blocking an author the FEED still calls blocked works at once', async () => {
+    // Worse than a delay for blocks: the cover is canReveal:false, so the
+    // user's own un-block was unhonoured with no way to see the content.
+    const item = makeItem({ viewer: { blocking: 'at://me/app.bsky.graph.block/xyz' } })
+    expect(moderation.cover(item).canReveal).toBe(false)
+    await moderation.unblock(item.post.author)
+    expect(moderation.isBlocked(item.post.author)).toBe(false)
+    expect(moderation.cover(item).blur).toBe(false)
+  })
+
+  it('rolls the un-silencing back if the write fails', async () => {
+    const item = makeItem({ viewer: { muted: true } })
+    vi.mocked(api.unmuteActor).mockRejectedValueOnce(new Error('offline'))
+    await expect(moderation.unmute(item.post.author)).rejects.toThrow('offline')
+    expect(moderation.isMuted(item.post.author)).toBe(true) // still muted
   })
 })
