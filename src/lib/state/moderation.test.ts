@@ -1,7 +1,20 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { BSKY_LABELER_DID, DEFAULT_LABEL_SETTINGS, type ModerationPrefs } from '@atproto/api'
 import { moderation } from './moderation.svelte'
 import type { FeedItem } from '../api/timeline'
+import * as api from '../api/moderation'
+
+// The wrappers themselves are one-liners over the agent; what needs testing is
+// the optimistic overlay around them, so stub the network edge.
+vi.mock('../api/moderation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/moderation')>()),
+  muteActor: vi.fn(async () => {}),
+  unmuteActor: vi.fn(async () => {}),
+  blockActor: vi.fn(async () => ({ uri: 'at://me/app.bsky.graph.block/abc' })),
+  unblockActor: vi.fn(async () => {}),
+  reportPost: vi.fn(async () => {}),
+  reportAccount: vi.fn(async () => {}),
+}))
 
 const AT = new Date(0).toISOString()
 
@@ -129,5 +142,94 @@ describe('moderation', () => {
     moderation.reveal(item)
     moderation.reset()
     expect(moderation.cover(item).blur).toBe(true)
+  })
+})
+
+describe('moderation actions', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  // The whole point of the overlay: a decision is computed from the post's
+  // `viewer` state, frozen at fetch time. Without a local override, blocking
+  // someone would appear to do nothing until the next refetch.
+  it('a block suppresses that author immediately, before any refetch', async () => {
+    const item = makeItem()
+    expect(moderation.hidden(item)).toBe(false)
+    await moderation.block(item.post.author)
+    expect(moderation.hidden(item)).toBe(true)
+    expect(api.blockActor).toHaveBeenCalledWith('did:plc:them')
+  })
+
+  it('a muted author is covered but still reachable; a blocked one is not', async () => {
+    const muted = makeItem()
+    await moderation.mute(muted.post.author)
+    const mc = moderation.cover(muted)
+    expect(mc.reason).toBe('Muted account')
+    expect(mc.canReveal).toBe(true)
+
+    moderation.reset()
+    moderation.setUser('did:plc:me')
+    const blocked = makeItem()
+    await moderation.block(blocked.post.author)
+    const bc = moderation.cover(blocked)
+    expect(bc.reason).toBe('Blocked account')
+    expect(bc.canReveal).toBe(false)
+  })
+
+  it('rolls the overlay back when the write fails', async () => {
+    const item = makeItem()
+    vi.mocked(api.blockActor).mockRejectedValueOnce(new Error('offline'))
+    await expect(moderation.block(item.post.author)).rejects.toThrow('offline')
+    // Rethrown so the UI can report it, and NOT left looking blocked.
+    expect(moderation.isBlocked(item.post.author)).toBe(false)
+    expect(moderation.hidden(item)).toBe(false)
+  })
+
+  it('rolls a failed mute back too', async () => {
+    const item = makeItem()
+    vi.mocked(api.muteActor).mockRejectedValueOnce(new Error('nope'))
+    await expect(moderation.mute(item.post.author)).rejects.toThrow('nope')
+    expect(moderation.isMuted(item.post.author)).toBe(false)
+  })
+
+  it('reads block state the feed already carried, and unblocks with its uri', async () => {
+    const server = makeItem({ viewer: { blocking: 'at://me/app.bsky.graph.block/xyz' } })
+    expect(moderation.isBlocked(server.post.author)).toBe(true)
+    expect(moderation.hidden(server)).toBe(true)
+    await moderation.unblock(server.post.author)
+    expect(api.unblockActor).toHaveBeenCalledWith('at://me/app.bsky.graph.block/xyz')
+  })
+
+  it('learns the record uri so a block made this session can be undone', async () => {
+    const item = makeItem()
+    await moderation.block(item.post.author)
+    expect(moderation.blockUri(item.post.author)).toBe('at://me/app.bsky.graph.block/abc')
+    await moderation.unblock(item.post.author)
+    expect(api.unblockActor).toHaveBeenCalledWith('at://me/app.bsky.graph.block/abc')
+    expect(moderation.isBlocked(item.post.author)).toBe(false)
+  })
+
+  it('reports a post against its exact cid', async () => {
+    const item = makeItem()
+    await moderation.reportPost(item, 'com.atproto.moderation.defs#reasonSpam', ' bot ')
+    expect(api.reportPost).toHaveBeenCalledWith(
+      item.post.uri,
+      item.post.cid,
+      'com.atproto.moderation.defs#reasonSpam',
+      ' bot ',
+    )
+  })
+
+  it('reporting alone does not hide anything — that stays the user’s choice', async () => {
+    const item = makeItem()
+    await moderation.reportPost(item, 'com.atproto.moderation.defs#reasonRude')
+    expect(moderation.hidden(item)).toBe(false)
+    expect(moderation.cover(item).blur).toBe(false)
+  })
+
+  it('forgets mutes and blocks on logout', async () => {
+    const item = makeItem()
+    await moderation.block(item.post.author)
+    moderation.reset()
+    expect(moderation.isBlocked(item.post.author)).toBe(false)
   })
 })

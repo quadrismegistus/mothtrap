@@ -21,6 +21,7 @@
   import { session } from '../state/session.svelte'
   import { settings } from '../state/settings.svelte'
   import { moderation } from '../state/moderation.svelte'
+  import { report } from '../state/report.svelte'
   import ProfileHover from './ProfileHover.svelte'
 
   interface Props {
@@ -122,6 +123,45 @@
 
   /** Which post's repost menu is open (uri) — per-post, since a run card holds many. */
   let repostMenuFor = $state<string | null>(null)
+  /** Same, for the ⋯ (report / mute / block) menu. */
+  let moreMenuFor = $state<string | null>(null)
+  /**
+   * This menu is positioned FIXED rather than absolute, unlike the repost menu
+   * just above it. The card is `overflow: hidden auto`, and four items are tall
+   * enough to escape the card's top edge — where they're clipped away and can't
+   * be clicked at all. The repost menu only has two items so it fits, which is
+   * why the card has got away with clipping until now.
+   *
+   * Fixed also needs a flip: opening upward near the top of the screen puts the
+   * menu under the topbar, which eats the pointer events.
+   */
+  const MORE_MENU_H = 190
+  let moreMenuUp = $state(true)
+  let moreMenuPos = $state({ left: 0, top: 0 })
+  function toggleMore(e: MouseEvent, uri: string) {
+    if (moreMenuFor === uri) {
+      moreMenuFor = null
+      return
+    }
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    moreMenuUp = r.top > MORE_MENU_H + 8
+    moreMenuPos = { left: r.left + r.width / 2, top: moreMenuUp ? r.top - 6 : r.bottom + 6 }
+    moreMenuFor = uri
+  }
+  const muted = $derived(moderation.isMuted(item.post.author))
+  const blocked = $derived(moderation.isBlocked(item.post.author))
+  /** Mute and block are fire-and-forget from the card's point of view, but a
+   * failure must not pass silently — the overlay rolls back and we say so. */
+  let modError = $state<string | undefined>(undefined)
+  async function runModAction(fn: () => Promise<void>) {
+    modError = undefined
+    moreMenuFor = null
+    try {
+      await fn()
+    } catch (err) {
+      modError = err instanceof Error ? err.message : 'That didn’t work'
+    }
+  }
   let copied = $state(false)
   const isSelf = $derived(item.post.author.did === session.did)
   const following = $derived(follows.following(item.post.author))
@@ -408,7 +448,48 @@
       </svg>
       <span>{interactions.likeCount(p)}</span>
     </button>
+
+    <div class="more-wrap">
+      <button
+        class="act more"
+        title="Report, mute or block"
+        aria-label="More actions"
+        onclick={(e) => toggleMore(e, p.post.uri)}>⋯</button
+      >
+      {#if moreMenuFor === p.post.uri}
+        <div
+          class="menu floating"
+          class:up={moreMenuUp}
+          style="left: {moreMenuPos.left}px; top: {moreMenuPos.top}px;"
+        >
+          <button
+            onclick={() => {
+              report.show(p)
+              moreMenuFor = null
+            }}>Report post</button
+          >
+          {#if !isSelf}
+            <button onclick={() => runModAction(() => (muted ? moderation.unmute(p.post.author) : moderation.mute(p.post.author)))}>
+              {muted ? 'Unmute' : 'Mute'} @{p.post.author.handle}
+            </button>
+            <button
+              class="danger"
+              onclick={() => runModAction(() => (blocked ? moderation.unblock(p.post.author) : moderation.block(p.post.author)))}
+            >
+              {blocked ? 'Unblock' : 'Block'} @{p.post.author.handle}
+            </button>
+            <button
+              onclick={() => {
+                report.show(p, 'account')
+                moreMenuFor = null
+              }}>Report account</button
+            >
+          {/if}
+        </div>
+      {/if}
+    </div>
   </div>
+  {#if modError && !compact}<p class="mod-error">{modError}</p>{/if}
 {/snippet}
 
 <style>
@@ -744,6 +825,32 @@
     position: relative;
     flex: 1;
     display: flex;
+  }
+  .more-wrap {
+    position: relative;
+    display: flex;
+  }
+  .act.more {
+    font-size: 1rem;
+    line-height: 1;
+    letter-spacing: 0.05em;
+  }
+  /* Escapes the card's overflow clip — see toggleMore(). */
+  .menu.floating {
+    position: fixed;
+    bottom: auto;
+    z-index: 900; /* over the topbar and the graph, under the modals (1000) */
+  }
+  .menu.floating.up {
+    transform: translate(-50%, -100%);
+  }
+  .menu button.danger {
+    color: var(--danger);
+  }
+  .mod-error {
+    margin: 0.35rem 0 0;
+    font-size: 0.78rem;
+    color: var(--danger);
   }
   .act {
     flex: 1;

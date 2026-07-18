@@ -166,6 +166,38 @@ test('a labeled post is covered on both node and card until revealed', async ({ 
   await expect(page.locator('button.node.covered')).toHaveCount(0) // node uncovers too
 })
 
+test('the ⋯ menu offers report, mute and block; blocking hides the author', async ({ page }) => {
+  await graphReady(page)
+  await page.locator('.wrap').first().click() // pin so the card survives
+  await page.locator('.card .act.more').first().click()
+  const menu = page.locator('.card .menu')
+  await expect(menu.getByText('Report post')).toBeVisible()
+  await expect(menu.getByText(/^Mute @/)).toBeVisible()
+  await expect(menu.getByText(/^Block @/)).toBeVisible()
+
+  // Report opens a dialog that outlives the card, and sending needs a reason.
+  await menu.getByText('Report post').click()
+  const dialog = page.locator('[role="dialog"][aria-label="Report"]')
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Send report' })).toBeDisabled()
+  await dialog.getByText('Spam', { exact: true }).click()
+  await expect(dialog.getByRole('button', { name: 'Send report' })).toBeEnabled()
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+})
+
+test('blocking an author removes their posts from the graph at once', async ({ page }) => {
+  await graphReady(page)
+  const before = await page.locator('button.node').count()
+  await page.locator('.wrap').first().click()
+  const handle = await page.locator('.card .handle').first().innerText()
+  await page.locator('.card .act.more').first().click()
+  await page.locator('.card .menu').getByText(/^Block @/).click()
+  // No refetch: the optimistic overlay has to suppress the author immediately.
+  await expect(page.locator(`.card .handle:has-text("${handle.trim()}")`)).toHaveCount(0)
+  expect(await page.locator('button.node').count()).toBeLessThanOrEqual(before)
+})
+
 test('single-click pins a node and keeps its card shown', async ({ page }) => {
   await graphReady(page)
   await page.locator('.wrap').first().click()

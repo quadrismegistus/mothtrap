@@ -7,8 +7,23 @@ import {
   type ModerationOpts,
   type ModerationPrefs,
 } from '@atproto/api'
-import { SvelteSet } from 'svelte/reactivity'
+import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import type { FeedItem } from '../api/timeline'
+import {
+  blockActor,
+  muteActor,
+  reportAccount,
+  reportPost,
+  unblockActor,
+  unmuteActor,
+  type ReportReason,
+} from '../api/moderation'
+
+/** Anything carrying the viewer state we care about — a post author, a profile. */
+interface Actor {
+  did: string
+  viewer?: { muted?: boolean; blocking?: string }
+}
 
 /**
  * Content moderation: we do not invent a policy, we HONOUR the account's own.
@@ -114,6 +129,19 @@ class Moderation {
    * edited post re-decides. Plain Map, not reactive — cleared whenever the
    * inputs it was computed under change. */
   #cache = new Map<string, ModerationDecision>()
+  /**
+   * Optimistic overlay for mutes and blocks made THIS session. A decision comes
+   * from the post's own `viewer` state, which is frozen at fetch time, so
+   * without this a block wouldn't visibly do anything until the next refetch —
+   * unacceptable for the one action a user takes when they want someone gone
+   * NOW. The overlay only ever ADDS suppression: un-muting or un-blocking drops
+   * the local entry, but if the server data still says muted, those posts stay
+   * hidden until the next fetch. Erring toward "still hidden" is the safe
+   * direction to be briefly wrong in.
+   */
+  #muted = new SvelteSet<string>()
+  /** did → block record uri; null while the write is still in flight. */
+  #blocked = new SvelteMap<string, string | null>()
 
   opts: ModerationOpts = $derived({ userDid: this.#userDid, prefs: this.#prefs })
 
@@ -140,6 +168,8 @@ class Moderation {
     this.#prefs = defaultPrefs()
     this.#revealed.clear()
     this.#cache.clear()
+    this.#muted.clear()
+    this.#blocked.clear()
   }
 
   decisionFor(item: FeedItem): ModerationDecision {
@@ -157,6 +187,8 @@ class Moderation {
    * the module note on why filtered posts still render as pulled-in context.
    */
   hidden(item: FeedItem): boolean {
+    // A mute or block made this session beats the post's frozen viewer state.
+    if (this.isMuted(item.post.author) || this.isBlocked(item.post.author)) return true
     return this.decisionFor(item).ui('contentList').filter
   }
 
@@ -178,6 +210,14 @@ class Moderation {
    */
   cover(item: FeedItem): Cover {
     if (this.#revealed.has(item.post.uri)) return NO_COVER
+    // Same as hidden(): an action taken this session outranks the fetched state,
+    // so a blocked author's pulled-in reply parent is covered immediately.
+    if (this.isBlocked(item.post.author)) {
+      return { blur: true, media: false, reason: 'Blocked account', canReveal: false }
+    }
+    if (this.isMuted(item.post.author)) {
+      return { blur: true, media: false, reason: 'Muted account', canReveal: true }
+    }
     const d = this.decisionFor(item)
     const list = d.ui('contentList')
     const media = d.ui('contentMedia')
@@ -207,6 +247,82 @@ class Moderation {
 
   isRevealed(uri: string): boolean {
     return this.#revealed.has(uri)
+  }
+
+  // ---- Authoring: mute, block, report -------------------------------------
+  // Optimistic, mirroring follows.toggle: apply locally, call the server, put
+  // the local state back if the call fails. Each rethrows so the caller can say
+  // so — silently failing to block someone would be its own kind of harm.
+
+  isMuted(actor: Actor): boolean {
+    return this.#muted.has(actor.did) || !!actor.viewer?.muted
+  }
+
+  /** The block record's uri, needed to undo. Undefined when not blocked. */
+  blockUri(actor: Actor): string | undefined {
+    const local = this.#blocked.get(actor.did)
+    if (local !== undefined) return local ?? undefined
+    return actor.viewer?.blocking
+  }
+
+  isBlocked(actor: Actor): boolean {
+    return this.#blocked.has(actor.did) || !!actor.viewer?.blocking
+  }
+
+  async mute(actor: Actor) {
+    if (this.#muted.has(actor.did)) return
+    this.#muted.add(actor.did)
+    try {
+      await muteActor(actor.did)
+    } catch (err) {
+      this.#muted.delete(actor.did)
+      throw err
+    }
+  }
+
+  async unmute(actor: Actor) {
+    const had = this.#muted.delete(actor.did)
+    try {
+      await unmuteActor(actor.did)
+    } catch (err) {
+      if (had) this.#muted.add(actor.did)
+      throw err
+    }
+  }
+
+  async block(actor: Actor) {
+    if (this.#blocked.has(actor.did)) return
+    this.#blocked.set(actor.did, null) // suppress now, learn the uri in a moment
+    try {
+      const res = await blockActor(actor.did)
+      this.#blocked.set(actor.did, res.uri)
+    } catch (err) {
+      this.#blocked.delete(actor.did)
+      throw err
+    }
+  }
+
+  async unblock(actor: Actor) {
+    const uri = this.blockUri(actor)
+    const prev = this.#blocked.get(actor.did)
+    this.#blocked.delete(actor.did)
+    if (!uri) return // block still in flight, or we never knew the record
+    try {
+      await unblockActor(uri)
+    } catch (err) {
+      if (prev !== undefined) this.#blocked.set(actor.did, prev)
+      throw err
+    }
+  }
+
+  /** Report a post. Nothing local changes — the report goes to the moderation
+   * service, and hiding the post is a separate choice the user makes. */
+  async reportPost(item: FeedItem, reason: ReportReason, detail?: string) {
+    await reportPost(item.post.uri, item.post.cid, reason, detail)
+  }
+
+  async reportAccount(actor: Actor, reason: ReportReason, detail?: string) {
+    await reportAccount(actor.did, reason, detail)
   }
 }
 
