@@ -315,11 +315,13 @@
     position: absolute;
     top: 0;
     right: 0;
-    /* Stop above the bottom control bar rather than sliding under it. Raising
-       the panel's z-index instead would bury the Digest button that closes it —
-       the fix would hide its own undo. --bottom-chrome is the height Graph
-       already measures for the force sim's keep-out. */
-    bottom: calc(var(--bottom-chrome, 0px) + 8px);
+    /* Runs to the floor. Ending the panel at the bar's measured top looked
+       right in a browser at the same dimensions but left a band of graph
+       showing through on the device — measuring chrome from a container whose
+       own bottom sits under the home indicator is not worth getting exactly
+       right when it can simply be made impossible. The bar is z-index 30 and
+       floats above; the list below pads itself so nothing hides under it. */
+    bottom: 0;
     width: 340px;
     max-width: 88vw;
     background: var(--bg-elev);
@@ -583,6 +585,8 @@
     list-style: none;
     margin: 0;
     padding: 0;
+    /* Clear the floating bottom bar, which now sits over the panel. */
+    padding-bottom: calc(var(--bottom-bar, 0px) + 12px);
     overflow-y: auto;
     flex: 1 1 0;
   }
