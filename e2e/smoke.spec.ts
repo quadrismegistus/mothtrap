@@ -619,3 +619,25 @@ test('is installable as a PWA (manifest + icons wired up)', async ({ page }) => 
   expect(icon.ok()).toBeTruthy()
   expect(icon.headers()['content-type']).toContain('image/png')
 })
+
+test('publishes reachable contact and privacy pages, linked from Help', async ({ page }) => {
+  await page.goto(DEMO)
+  await page.locator('.help').click()
+  const legal = page.locator('.modal .legal')
+  await expect(legal.getByRole('link', { name: 'Contact' })).toHaveAttribute('href', /contact\.html$/)
+  await expect(legal.getByRole('link', { name: 'Privacy' })).toHaveAttribute('href', /privacy\.html$/)
+
+  // Guideline 1.2 wants contact info a person can actually reach, so the page
+  // has to be served — not just linked — and carry a real address.
+  for (const path of ['/contact.html', '/privacy.html']) {
+    const res = await page.request.get(path)
+    expect(res.ok(), `${path} should be served`).toBeTruthy()
+    expect(res.headers()['content-type']).toContain('text/html')
+    expect(await res.text()).toContain('contact@mothtrap.blue')
+  }
+
+  // The privacy page must keep disclosing the one thing that leaves the device.
+  const privacy = await (await page.request.get('/privacy.html')).text()
+  expect(privacy).toContain('digest')
+  expect(privacy).toMatch(/handles/i)
+})
