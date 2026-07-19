@@ -391,8 +391,24 @@ export function withTopicPills(posts: TreeNode[], pills: TopicPill[]): TreeNode[
     // it falls back to the caller's centroid like any other under-populated pill.
     // One reparenting member is enough to make a real tree (a pill over a
     // thread root plus its replies). The pathology is specifically ZERO.
-    const attachable = members.filter((u) => !byUri.get(u)!.parent)
-    if (members.length < 2 || attachable.length === 0) continue
+    // Attach the pill above the ROOT of each member's visible tree, not merely
+    // above members that happen to be parentless. Expanding a conversation
+    // pulls a member's ancestors onto the canvas, which GIVES that member a
+    // parent; once the last one had a parent, the pill was skipped entirely and
+    // fell back to the caller's centroid — stranded where it stood with edges
+    // radiating back to its members, which is the pathology described below
+    // arriving by a different route.
+    const rootOf = (u: string) => {
+      let cur = u
+      for (let hops = 0; hops < 64; hops++) {
+        const par = byUri.get(cur)?.parent
+        if (!par || !byUri.has(par)) return cur
+        cur = par
+      }
+      return cur // cycle guard: malformed reply chains shouldn't hang the layout
+    }
+    const roots = [...new Set(members.map(rootOf))]
+    if (members.length < 2) continue
     let loudest = members[0]
     for (const u of members) if (byUri.get(u)!.y < byUri.get(loudest)!.y) loudest = u
     const a = byUri.get(loudest)!
@@ -404,7 +420,10 @@ export function withTopicPills(posts: TreeNode[], pills: TopicPill[]): TreeNode[
     // precisely the layout the pill-as-tree-root design replaced.
     const newest = members.reduce((t, u) => Math.max(t, byUri.get(u)!.timestamp || 0), 0)
     pillNodes.push({ uri: pill.sid, timestamp: newest, parent: undefined, x: a.x, y: a.y, sizeRank: 1 })
-    for (const u of members) pillOf.set(u, pill.sid)
+    // First pill to claim a root keeps it: two pills whose members sit in the
+    // same thread would otherwise fight over its root, and the loser's edges
+    // would radiate across the canvas again.
+    for (const u of roots) if (!pillOf.has(u)) pillOf.set(u, pill.sid)
   }
   const reparented = posts.map((p) => (p.parent || !pillOf.has(p.uri) ? p : { ...p, parent: pillOf.get(p.uri) }))
   return [...pillNodes, ...reparented]
