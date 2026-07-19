@@ -6,7 +6,11 @@
     buildGraph,
     climbChain,
     contextNode,
+    buildTimeDomain,
     layoutPositions,
+    positionsFrozenTime,
+    timeDomainIsStale,
+    type TimeDomain,
     parentUriOf,
     rootUriOf,
     threadDescendants,
@@ -395,19 +399,34 @@
    * now, so filling it is no longer the goal.
    */
   /**
-   * Corpus-wide ranking in reservoir mode, so a post's place does not depend on
-   * which OTHER posts happen to be planned.
+   * In reservoir mode the TIME axis is frozen and the rest stays live.
    *
-   * A frozen rank domain used to sit here, to stop backfill re-normalising
-   * everyone. It was removed: it froze `score`, which is a rate that DECAYS with
-   * wall-clock age, so over a few hours the whole population slid down the y
-   * axis and only new arrivals reached the top. That is not a tuning problem --
-   * freezing a moving quantity is wrong -- and it came with a NaN-propagation
-   * path, an off-by-one in the interpolation, a staleness test that could never
-   * fire on a shrinking corpus, and no position at all for ghost nodes. The
-   * churn it bought back (38%) is not worth carrying that.
+   * Fractional rank is relative, so each post arriving from backfill
+   * re-normalised every other post and the graph re-laid itself out mid-load.
+   * Freezing both axes fixed that and broke something worse: `score` decays with
+   * wall-clock age, so a frozen y made the whole population sink over a few
+   * hours. Timestamps do not decay. x is also the axis backfill actually
+   * disturbs, so this is where the stability was wanted.
+   *
+   * Captured in an effect rather than inside the derived: a derived that
+   * assigns is lazy, so WHEN the snapshot was taken depended on read order.
    */
-  const nodeLayout = $derived(layoutPositions(bleed.x ? graph.nodes : visibleNodes))
+  // The snapshot is captured here rather than in an $effect, and is a plain
+  // variable rather than $state. Both were tried: an effect that tests the
+  // snapshot and replaces it is a read-write cycle, and routing the change to
+  // the derived through a version counter still fed back around the graph --
+  // effect_update_depth_exceeded, nothing rendered at all.
+  //
+  // The trade, stated plainly: a derived is lazy, so WHEN the snapshot is taken
+  // depends on when the layout is first read rather than on the data. That is
+  // tolerable because timeDomainIsStale is a pure test of the corpus, so a late
+  // capture produces the same domain a prompt one would.
+  let timeDomain: TimeDomain | null = null
+  const nodeLayout = $derived.by(() => {
+    if (!bleed.x) return layoutPositions(visibleNodes)
+    if (timeDomainIsStale(timeDomain, graph.nodes)) timeDomain = buildTimeDomain(graph.nodes)
+    return positionsFrozenTime(visibleNodes, graph.nodes, timeDomain!)
+  })
 
   const visibleUris = $derived(new Set(visibleNodes.map((n) => n.uri)))
   // A post may be displayed by a node other than itself (run member → run
