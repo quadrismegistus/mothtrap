@@ -91,6 +91,9 @@
   // can be read without hovering. A pill is roughly four times an avatar's
   // footprint, so far fewer posts fit — that is the trade, not a side effect.
   const PILL_H = 56
+  /** Breathing room between pills. Used by the tidy-tree grid, the collision
+   * force and the node budget alike — see ForceLayout.setCollision. */
+  const PILL_GAP = { x: 26, y: 20 }
   // Narrow canvases get a narrower pill, so a phone still fits one comfortably.
   // ?pills=1 turns it on without a settings control, so the idea can be looked
   // at on any build (and screenshotted) before deciding it deserves UI.
@@ -99,7 +102,7 @@
     settings.postNodes || pillsParam
       ? // On a phone the pill takes nearly the full width: PAD_X is sized for
         // avatars, and honouring it here wastes a third of a narrow canvas.
-        { w: Math.round(Math.min(212, Math.max(148, w - 32))), h: PILL_H }
+        { w: Math.round(Math.min(212, Math.max(148, w - 32))), h: PILL_H, gap: PILL_GAP }
       : undefined,
   )
   /** Half of what geometrically fits: the rest is room for the force layout to
@@ -108,7 +111,7 @@
     if (!pill) return settings.nodeLimit
     // By area, not whole columns: on a narrow canvas the column count rounds
     // down to 1 and throws away most of the height.
-    const cell = (pill.w + 16) * (pill.h + 22)
+    const cell = (pill.w + pill.gap.x) * (pill.h + pill.gap.y)
     const area = Math.max(0, w - 24) * Math.max(0, h - PAD_TOP - 60)
     return Math.max(8, Math.min(settings.nodeLimit, Math.round((area / cell) * 0.5)))
   })
@@ -905,7 +908,7 @@
     const links = [...visibleEdges.map((e) => ({ source: e.from, target: e.to })), ...topicLinks]
     // Clamp nodes inside the canvas so they can't drift up under the top bar (the
     // graph starts below it, but the sim could otherwise push a node to the edge).
-    layout?.setCollision(!!pill) // circles vs rectangles
+    layout?.setCollision(pill ? pill.gap : null) // rectangles vs circles
     layout?.setBounds(w, h, 18, Math.max(24, bottomChrome))
     layout?.update(t, links, new Set(pinned), settings.cohesion)
   })

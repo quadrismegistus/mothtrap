@@ -46,7 +46,7 @@ export interface Target {
  * quadtree would cost more in complexity than it saves in a thousand pair
  * checks per tick.
  */
-function rectCollide(pad: number, strength = 0.7, iterations = 2) {
+function rectCollide(padX: number, padY: number, strength = 0.7, iterations = 2) {
   let nodes: SimNode[] = []
   // Deliberately ignores alpha, as d3's own forceCollide does. Scaling the
   // push by alpha means separation weakens as the sim cools, so overlapping
@@ -62,9 +62,9 @@ function rectCollide(pad: number, strength = 0.7, iterations = 2) {
         if (b.x == null || b.y == null) continue
         const dx = b.x - a.x
         const dy = b.y - a.y
-        const ox = (a.hw ?? a.r) + (b.hw ?? b.r) + pad - Math.abs(dx)
+        const ox = (a.hw ?? a.r) + (b.hw ?? b.r) + padX - Math.abs(dx)
         if (ox <= 0) continue
-        const oy = (a.hh ?? a.r) + (b.hh ?? b.r) + pad - Math.abs(dy)
+        const oy = (a.hh ?? a.r) + (b.hh ?? b.r) + padY - Math.abs(dy)
         if (oy <= 0) continue
         // Separate along the axis of least penetration: pills that merely graze
         // side-on shouldn't be flung vertically.
@@ -108,6 +108,7 @@ export class ForceLayout {
   // The bottom chrome (gear bottom-left, Digest/Load-more bottom-right) lives in
   // the CORNERS, so a bigger bottom inset is reserved only there — the
   #bounds = { w: 0, h: 0, top: 0, bottom: 0 }
+  #edge = 2
 
   constructor(onTick: () => void) {
     this.sim = forceSimulation<SimNode, SimLink>([])
@@ -123,12 +124,19 @@ export class ForceLayout {
     this.sim.stop()
   }
 
-  /** Circles (avatars) or rectangles (post pills). Cheap to flip: the sim keeps
-   * its nodes and positions, so toggling re-settles rather than restarting. */
-  setCollision(rect: boolean) {
+  /** Circles (avatars), or rectangles with the caller's gap (post pills). Cheap
+   * to flip: the sim keeps its nodes and positions, so toggling re-settles
+   * rather than restarting. The gap comes from the caller so that the collision,
+   * the tidy-tree grid and the node budget all read the same number — three
+   * copies of it would drift apart the first time one was tuned. */
+  setCollision(gap: { x: number; y: number } | null) {
+    // Keep nodes off the canvas edge by the same gap they keep from each other.
+    // The old 2px was fine for an avatar but leaves a 212px pill flush against
+    // the frame, where it sits on top of the axis labels.
+    this.#edge = gap ? Math.min(gap.x, gap.y) : 2
     this.sim.force(
       'collide',
-      rect ? rectCollide(9) : forceCollide<SimNode>((d) => d.r + 9).strength(0.9),
+      gap ? rectCollide(gap.x, gap.y) : forceCollide<SimNode>((d) => d.r + 9).strength(0.9),
     )
   }
 
@@ -143,7 +151,8 @@ export class ForceLayout {
     for (const n of this.#nodes) {
       const hw = n.hw ?? n.r
       const hh = n.hh ?? n.r
-      if (n.x != null) n.x = Math.max(hw + 2, Math.min(w - hw - 2, n.x))
+      const e = this.#edge
+      if (n.x != null) n.x = Math.max(hw + e, Math.min(w - hw - e, n.x))
       if (n.y != null) n.y = Math.max(top + hh, Math.min(h - bottom - hh, n.y))
     }
   }

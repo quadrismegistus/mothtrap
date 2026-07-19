@@ -208,8 +208,9 @@ export interface TreeLayoutBox {
   innerH: number
   minSize: number
   maxSize: number
-  /** Pill mode: nodes are w x h rectangles rather than circles up to maxSize. */
-  pill?: { w: number; h: number }
+  /** Pill mode: nodes are w x h rectangles rather than circles up to maxSize.
+   * `gap` is the same spacing the collision force uses. */
+  pill?: { w: number; h: number; gap: { x: number; y: number } }
 }
 export interface TreeTarget {
   id: string
@@ -239,8 +240,8 @@ export function treeTargets(nodes: TreeNode[], box: TreeLayoutBox): TreeTarget[]
   // so a thread reads top-down as a conversation.
   // A pill is wide and short, so its columns need far more room than its rows —
   // the opposite of the avatar case, where rows are the taller unit.
-  const X_UNIT = pill ? pill.w + 16 : maxSize + 18
-  const Y_UNIT = pill ? pill.h + 22 : maxSize + 30
+  const X_UNIT = pill ? pill.w + pill.gap.x : maxSize + 18
+  const Y_UNIT = pill ? pill.h + pill.gap.y : maxSize + 30
 
   const byUri = new Map(nodes.map((n) => [n.uri, n]))
   const childrenOf = new Map<string, TreeNode[]>()
