@@ -73,105 +73,6 @@ function fractionalRanks(values: number[]): number[] {
   return ranks
 }
 
-/**
- * A frozen snapshot of the rank scales, so positions stop moving when the
- * corpus grows.
- *
- * Fractional rank is RELATIVE: every post arriving from backfill re-normalises
- * every other post's rank, so the whole graph re-laid itself out several times
- * during load (measured: a 1679px burst three seconds in, then more). Absolute
- * scales would fix that but clump badly -- most posts have similar engagement,
- * which is exactly why ranks were used.
- *
- * So the scale is a rank domain captured once and interpolated into. New posts
- * find their place among the existing ones without moving them, and the domain
- * is only rebuilt when the corpus has changed enough to be a different corpus.
- */
-export interface RankDomain {
-  t: number[]
-  s: number[]
-  r: number[]
-  size: number
-}
-
-const asc = (a: number, b: number) => a - b
-
-export function buildRankDomain(nodes: GraphNode[]): RankDomain {
-  return {
-    t: nodes.map((n) => n.timestamp).sort(asc),
-    s: nodes.map((n) => n.score).sort(asc),
-    r: nodes.map(replySignal).sort(asc),
-    size: nodes.length,
-  }
-}
-
-/**
- * Should the domain be rebuilt? Only once the corpus has DOUBLED.
- *
- * Measured: at a 25% threshold the corpus crosses it repeatedly during load --
- * it grows fast at first -- and each rebuild re-normalises every post, which
- * left a 1142px burst mid-settle. Doubling makes rebuilds rare enough to be
- * invisible while still adapting to a corpus that has genuinely changed
- * character. Total settling travel: 7925px relative, 6536px at 25%, 4936px here.
- */
-export function domainIsStale(d: RankDomain | null, nodes: GraphNode[]): boolean {
-  if (!d || !d.size) return true
-  const growth = Math.abs(nodes.length - d.size) / d.size
-  return growth > 1
-}
-
-/** Fraction of the domain at or below `v`, by binary search. */
-function placeIn(sorted: number[], v: number): number {
-  const n = sorted.length
-  if (n < 2) return 0.5
-  let lo = 0
-  let hi = n
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1
-    if (sorted[mid] <= v) lo = mid + 1
-    else hi = mid
-  }
-  // Clamped, so a post newer or louder than anything in the snapshot sits at
-  // the end of the axis rather than off it.
-  return Math.max(0, Math.min(1, lo / (n - 1)))
-}
-
-/**
- * Share of the time axis kept for posts newer than the snapshot.
- *
- * Every post that arrives after the domain was captured is newer than
- * everything in it, so clamping piled them all on the same pixel column at
- * x = 1 -- a clump that pushed four posts off screen. The tail spreads them by
- * timestamp instead.
- *
- * Against a FIXED span, not the newest post on hand. Measuring the tail from
- * the live newest meant every arrival re-normalised every other tail post, and
- * settling travel went to 9960px -- worse than the relative ranking this whole
- * mechanism replaced. A post's place in the tail now depends only on its own
- * timestamp, so arrivals do not move each other.
- */
-const NEW_TAIL = 0.15
-const NEW_TAIL_SPAN_MS = 3 * 60 * 60 * 1000
-
-/** Same shape as layoutPositions, but against a frozen domain. */
-export function positionsInDomain(nodes: GraphNode[], d: RankDomain): Map<string, NodePosition> {
-  const out = new Map<string, NodePosition>()
-  const domainNewest = d.t.length ? d.t[d.t.length - 1] : 0
-
-  for (const n of nodes) {
-    const x =
-      n.timestamp <= domainNewest
-        ? placeIn(d.t, n.timestamp) * (1 - NEW_TAIL)
-        : 1 - NEW_TAIL + NEW_TAIL * Math.min(1, (n.timestamp - domainNewest) / NEW_TAIL_SPAN_MS)
-    out.set(n.uri, {
-      x,
-      y: 1 - placeIn(d.s, n.score),
-      sizeRank: placeIn(d.r, replySignal(n)),
-    })
-  }
-  return out
-}
-
 function timestampOf(item: FeedItem): number {
   const rec = item.post.record
   const created = AppBskyFeedPost.isRecord(rec) ? rec.createdAt : undefined
@@ -510,8 +411,15 @@ export function withTopicPills(posts: TreeNode[], pills: TopicPill[]): TreeNode[
       }
       return cur // cycle guard: malformed reply chains shouldn't hang the layout
     }
-    const roots = [...new Set(members.map(rootOf))]
-    if (members.length < 2) continue
+    // Only roots nobody has claimed yet. Without this a pill whose members all
+    // sit inside another pill's thread was still emitted, with zero children:
+    // a synthetic tree root whose whole subtree is itself. That bypasses the
+    // centroid fallback AND consumes a conversation rank, which is exactly the
+    // pathology described above arriving by a new route. The old code gated on
+    // `attachable.length === 0` for this reason; the gate was dropped when the
+    // climb was introduced and nothing replaced it.
+    const roots = [...new Set(members.map(rootOf))].filter((u) => !pillOf.has(u))
+    if (members.length < 2 || roots.length === 0) continue
     let loudest = members[0]
     for (const u of members) if (byUri.get(u)!.y < byUri.get(loudest)!.y) loudest = u
     const a = byUri.get(loudest)!
@@ -523,12 +431,14 @@ export function withTopicPills(posts: TreeNode[], pills: TopicPill[]): TreeNode[
     // precisely the layout the pill-as-tree-root design replaced.
     const newest = members.reduce((t, u) => Math.max(t, byUri.get(u)!.timestamp || 0), 0)
     pillNodes.push({ uri: pill.sid, timestamp: newest, parent: undefined, x: a.x, y: a.y, sizeRank: 1 })
-    // First pill to claim a root keeps it: two pills whose members sit in the
-    // same thread would otherwise fight over its root, and the loser's edges
-    // would radiate across the canvas again.
-    for (const u of roots) if (!pillOf.has(u)) pillOf.set(u, pill.sid)
+    // First pill to claim a root keeps it; `roots` is already filtered to the
+    // unclaimed, so the loser is skipped above rather than emitted childless.
+    for (const u of roots) pillOf.set(u, pill.sid)
   }
-  const reparented = posts.map((p) => (p.parent || !pillOf.has(p.uri) ? p : { ...p, parent: pillOf.get(p.uri) }))
+  // Keyed on pillOf alone. Testing `p.parent` as well skipped a root that
+  // rootOf reached through a dangling parent or a cycle -- the pill claimed it
+  // and then failed to adopt it, leaving the pill childless again.
+  const reparented = posts.map((p) => (pillOf.has(p.uri) ? { ...p, parent: pillOf.get(p.uri) } : p))
   return [...pillNodes, ...reparented]
 }
 

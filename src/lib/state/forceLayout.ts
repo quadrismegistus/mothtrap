@@ -301,25 +301,6 @@ export class ForceLayout {
     return c
   }
 
-  /**
-   * Project a point out to the world's boundary, keeping its direction from the
-   * frame's centre. A post bound for the top-right enters from the top-right,
-   * so its arrival reads as coming from where it belongs rather than sliding in
-   * from an arbitrary edge.
-   */
-  #outsideAlong(tx: number, ty: number) {
-    const { w, h, bleedX, bleedY } = this.#bounds
-    const cx = w / 2
-    const cy = h / 2
-    const vx = tx - cx
-    const vy = ty - cy
-    if (!vx && !vy) return { x: cx, y: -bleedY } // dead centre: come from above
-    const kx = vx ? (cx + bleedX) / Math.abs(vx) : Infinity
-    const ky = vy ? (cy + bleedY) / Math.abs(vy) : Infinity
-    const k = Math.min(kx, ky)
-    return { x: cx + vx * k, y: cy + vy * k }
-  }
-
   /** Keep every node fully within the canvas (below `top`, above `bottom`, and
    * inside the left/right edges), respecting its radius. */
   /**
@@ -338,6 +319,11 @@ export class ForceLayout {
       const hw = n.hw ?? n.r
       const hh = n.hh ?? n.r
       const e = this.#edge
+      // A pinned (dragged) node is clamped through fx/fy too, or d3 restores
+      // x = fx at the top of every tick and the rendered pill stops tracking the
+      // cursor near an edge, then jumps the whole hysteresis band the moment the
+      // pointer crosses it.
+      const pinned = n.fx != null && n.fy != null
       // `bleed` is how far a node's CENTRE may travel past the frame -- not how
       // far its edge may poke out. Subtracting it from an hw-based inset (the
       // first attempt) let bleed cancel hw and confined every centre to the
@@ -363,6 +349,10 @@ export class ForceLayout {
         // straight across y=0 instead -- still sliced, just by a different line.
         n.y = this.#unstraddle(n.y, hh + e, 0)
         n.y = this.#unstraddle(n.y, hh + e, h)
+      }
+      if (pinned) {
+        n.fx = n.x
+        n.fy = n.y
       }
     }
   }

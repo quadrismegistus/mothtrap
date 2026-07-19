@@ -5,11 +5,7 @@
   import {
     buildGraph,
     contextNode,
-    buildRankDomain,
-    domainIsStale,
     layoutPositions,
-    positionsInDomain,
-    type RankDomain,
     parentUriOf,
     rootUriOf,
     threadDescendants,
@@ -361,25 +357,19 @@
    * now, so filling it is no longer the goal.
    */
   /**
-   * In reservoir mode, positions come from a FROZEN rank domain.
+   * Corpus-wide ranking in reservoir mode, so a post's place does not depend on
+   * which OTHER posts happen to be planned.
    *
-   * Fractional rank is relative, so each post arriving from backfill
-   * re-normalised every other post's rank and the whole graph re-laid itself
-   * out mid-load -- measured as a 1679px burst three seconds in, with more
-   * after. Interpolating into a captured domain lets a new post find its place
-   * among the others without moving them.
-   *
-   * The domain is rebuilt only once the corpus is materially different (see
-   * domainIsStale), because rebuilding on every arrival would restore exactly
-   * the churn this removes. Avatar mode keeps the subset-relative behaviour,
-   * where filling the canvas is still the goal.
+   * A frozen rank domain used to sit here, to stop backfill re-normalising
+   * everyone. It was removed: it froze `score`, which is a rate that DECAYS with
+   * wall-clock age, so over a few hours the whole population slid down the y
+   * axis and only new arrivals reached the top. That is not a tuning problem --
+   * freezing a moving quantity is wrong -- and it came with a NaN-propagation
+   * path, an off-by-one in the interpolation, a staleness test that could never
+   * fire on a shrinking corpus, and no position at all for ghost nodes. The
+   * churn it bought back (38%) is not worth carrying that.
    */
-  let rankDomain: RankDomain | null = null
-  const nodeLayout = $derived.by(() => {
-    if (!bleed.x) return layoutPositions(visibleNodes)
-    if (domainIsStale(rankDomain, graph.nodes)) rankDomain = buildRankDomain(graph.nodes)
-    return positionsInDomain(graph.nodes, rankDomain!)
-  })
+  const nodeLayout = $derived(layoutPositions(bleed.x ? graph.nodes : visibleNodes))
 
   const visibleUris = $derived(new Set(visibleNodes.map((n) => n.uri)))
   // A post may be displayed by a node other than itself (run member → run
@@ -506,6 +496,11 @@
    */
   const ARRIVAL_MS = 450
   const arriving = new SvelteSet<string>()
+  const arrivalTimers = new Set<ReturnType<typeof setTimeout>>()
+  $effect(() => () => {
+    for (const t of arrivalTimers) clearTimeout(t)
+    arrivalTimers.clear()
+  })
   let everPlaced = new Set<string>()
   let hasPainted = false
   $effect(() => {
@@ -516,7 +511,7 @@
       // in from the edges is the load flicker, not an entrance.
       if (hasPainted) {
         arriving.add(uri)
-        setTimeout(() => arriving.delete(uri), ARRIVAL_MS + 120)
+        arrivalTimers.add(setTimeout(() => arriving.delete(uri), ARRIVAL_MS + 120))
       }
     }
     everPlaced = now
@@ -1273,8 +1268,16 @@
     view.k = 1
   }
 
+  const CHROME_SELECTOR = '.wrap, .card, .config-wrap, .hud, .panel, .digest-btn, .topic-node, .coverage'
+
   function onWheel(e: WheelEvent) {
     if (!graphEl) return
+    // Everything scrollable lives inside .graph -- the post card, the digest
+    // panel, the settings popover. Zooming unconditionally swallowed their
+    // wheel events, so a long card could not be scrolled at all: the graph
+    // zoomed out underneath instead. Every other canvas handler already guards
+    // on the target; this one did not.
+    if ((e.target as HTMLElement).closest(CHROME_SELECTOR)) return
     e.preventDefault()
     const r = graphEl.getBoundingClientRect()
     const px = e.clientX - r.left
@@ -1309,10 +1312,21 @@
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      panRelease = null
     }
+    // pointercancel matters on touch: the browser can claim a background drag,
+    // and without this the listeners survive with stale start coordinates, so
+    // every later touch re-pans from wherever the abandoned gesture began.
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+    panRelease = up
   }
+  /** Set while a pan is in flight, so teardown can release a gesture that never
+   * ended -- an unmount mid-drag would otherwise leak the window listeners. */
+  let panRelease: (() => void) | null = null
+  $effect(() => () => panRelease?.())
 
   function onNodeDrag(uri: string, clientX: number, clientY: number) {
     const p = toGraph(clientX, clientY)
@@ -1453,23 +1467,32 @@
    * still over either one, so only genuinely leaving both closes the card.
    */
   function pointerOverPostOrCard(): boolean {
-    if (ptr.x < 0) return false
+    if (ptr.x < 0 || !graphEl) return false
+    // Scoped to THIS graph. Matching '.card' against the whole document also
+    // matched the login card, so after a session expiry the timer kept finding
+    // one and re-arming against a component that no longer exists.
     return document
       .elementsFromPoint(ptr.x, ptr.y)
-      .some((el) => el.closest('.wrap, .card, .profile-pop'))
+      .some((el) => graphEl.contains(el) && el.closest('.wrap, .card, .profile-pop'))
   }
   function scheduleClear() {
     clearTimeout(clearTimer)
+    // Bounded re-arming. The pointer position only updates on pointermove, so a
+    // pointer that leaves the window while over a node leaves `ptr` frozen
+    // inside it -- an unbounded re-arm would then poll elementsFromPoint (which
+    // forces layout) every GRACE ms for the life of the page, and the card would
+    // never close. Ten rounds is far longer than any real reach between a post
+    // and its card.
+    let rounds = 0
     clearTimer = setTimeout(function tick() {
-      if (pointerOverPostOrCard()) {
-        // Still on one of them: keep it open and look again shortly, rather
-        // than waiting for another leave event that may never come.
+      if (rounds++ < 10 && pointerOverPostOrCard()) {
         clearTimer = setTimeout(tick, GRACE)
         return
       }
       hovered = null
     }, GRACE)
   }
+  $effect(() => () => clearTimeout(clearTimer))
 
   function onKey(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement) return
@@ -1493,7 +1516,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="graph"
-  role="application"
+  role="group"
   aria-label="Conversation graph"
   style="--bottom-chrome: {bottomChrome}px; --bottom-bar: {bottomBar}px"
   bind:this={graphEl}
@@ -1625,12 +1648,22 @@
     </button>
   {/each}
 
+  </div>
+
+  <!-- Cards render OUTSIDE the transform layer, in screen coordinates.
+       A transform makes its element the containing block for `position: fixed`
+       descendants, so the profile popover and the ⋯ menu -- both of which
+       compute coordinates from getBoundingClientRect() -- were landing ~56px
+       low and then being clipped away by .graph's overflow. That is the very
+       bug the popover was moved to `fixed` to fix, reintroduced by this PR's
+       own pan/zoom layer. Keeping cards out also stops their text scaling with
+       zoom, which is what you want from a reading surface. -->
   {#each cards as c (c.node.uri)}
     <PostCard
       item={c.node.item}
       run={c.node.run}
-      x={c.x}
-      y={c.y}
+      x={c.x * view.k + view.x}
+      y={c.y * view.k + view.y}
       boundsH={h}
       canMapReplies={c.node.isThreadRoot || (c.node.item.post.replyCount ?? 0) > 0}
       repliesMapped={repliesMapped(c.node.item)}
@@ -1648,7 +1681,6 @@
       }}
     />
   {/each}
-  </div>
 
   {#if items.length === 0 && !loading}
     <div class="empty">{error ?? 'No posts.'}</div>
@@ -1883,10 +1915,15 @@
     position: absolute;
     inset: 0;
     pointer-events: none;
+    /* The world extends past the frame, and pan/zoom brings it on screen. The
+       SVG is sized w x h, so without this a reply edge out in the reservoir is
+       sliced at the old frame line and its tree renders as loose nodes. */
+    overflow: visible;
   }
   .annotations {
     position: absolute;
     inset: 0;
+    overflow: visible;
     pointer-events: none;
   }
   .annotations path {
@@ -1923,11 +1960,6 @@
   .node-caption {
     position: absolute;
     transform: translate(-50%, 0);
-  }
-  /* Anchor the caption's BOTTOM to the pill's top, so a label that wraps to two
-     lines grows upward instead of sliding down over the post. */
-  .node-caption.above {
-    transform: translate(-50%, -100%);
     max-width: 8rem;
     font-size: 0.62rem;
     font-weight: 600;
@@ -1939,6 +1971,14 @@
       0 1px 3px var(--bg),
       0 0 4px var(--bg);
     z-index: 2;
+  }
+  /* Anchor the caption's BOTTOM to the pill's top, so a label that wraps to two
+     lines grows upward instead of sliding down over the post. Position only --
+     every other declaration belongs to .node-caption and applies in both modes.
+     Splitting the block put them all in here, which left avatar-mode captions
+     unstyled: body-sized, untinted, unclamped, and swallowing pointer events. */
+  .node-caption.above {
+    transform: translate(-50%, -100%);
   }
   .topic-node.pinned {
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 60%, transparent);

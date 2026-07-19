@@ -656,9 +656,10 @@ describe('withTopicPills', () => {
       { sid: 'topic:second', members: ['r1', 'r2'] },
     ])
     expect(out.find((n) => n.uri === 'op')!.parent).toBe('topic:first')
-    expect(out.some((n) => n.uri === 'topic:second')).toBe(true) // still drawn…
-    // …but it did not steal the root out from under the first.
-    expect(out.filter((n) => n.parent === 'topic:second')).toHaveLength(0)
+    // The loser is SKIPPED, not drawn childless. This test previously asserted
+    // it was still emitted with zero children, which is the centroid pathology
+    // the pill-as-tree-root design exists to remove -- the test encoded the bug.
+    expect(out.some((n) => n.uri === 'topic:second')).toBe(false)
   })
 
   it('survives a malformed reply cycle without hanging', () => {
@@ -666,6 +667,24 @@ describe('withTopicPills', () => {
     const posts = [post('a', { parent: 'b' }), post('b', { parent: 'a' })]
     const out = withTopicPills(posts, [{ sid: 'topic:t', members: ['a', 'b'] }])
     expect(out.length).toBeGreaterThan(0)
+    // Whatever the climb settles on, the pill must either adopt it or not be
+    // drawn -- never be emitted as a root with an empty subtree.
+    const pill = out.find((n) => n.uri === 'topic:t')
+    if (pill) expect(out.some((n) => n.parent === 'topic:t')).toBe(true)
+  })
+
+  it('never emits a pill with no children', () => {
+    // The invariant behind both cases above, stated directly.
+    const posts = [post('op'), post('r1', { parent: 'op' }), post('r2', { parent: 'op' })]
+    const out = withTopicPills(posts, [
+      { sid: 'topic:a', members: ['op', 'r1'] },
+      { sid: 'topic:b', members: ['r1', 'r2'] },
+      { sid: 'topic:c', members: ['r2', 'op'] },
+    ])
+    for (const n of out) {
+      if (!n.uri.startsWith('topic:')) continue
+      expect(out.some((m) => m.parent === n.uri)).toBe(true)
+    }
   })
 
   it('leaves non-topic posts untouched', () => {
