@@ -105,6 +105,19 @@
         { w: Math.round(Math.min(212, Math.max(148, w - 32))), h: PILL_H, gap: PILL_GAP }
       : undefined,
   )
+  /**
+   * The reservoir: how far the world extends past each edge of the frame, and
+   * how many extra posts that buys. A ring roughly one pill deep holds about
+   * 40% again of what fits inside, which is enough that several dismissals in a
+   * row still have supply without paying to label posts nobody will see.
+   */
+  const OVERFLOW = 0.4
+  // Sized so the ring's AREA is about OVERFLOW of the frame's, which is not the
+  // same as making it a pill deep: a perimeter band grows with the perimeter, so
+  // a ring "one pill deep" on every side swallowed half the budget and hid it.
+  const bleed = $derived(
+    pill ? { x: Math.round(pill.w * 0.5), y: Math.round(pill.h * 0.85) } : { x: 0, y: 0 },
+  )
   /** Half of what geometrically fits: the rest is room for the force layout to
    * spread a conversation rather than tile it. */
   const pillBudget = $derived.by(() => {
@@ -113,7 +126,8 @@
     // down to 1 and throws away most of the height.
     const cell = (pill.w + pill.gap.x) * (pill.h + pill.gap.y)
     const area = Math.max(0, w - 24) * Math.max(0, h - PAD_TOP - 60)
-    return Math.max(8, Math.min(settings.nodeLimit, Math.round((area / cell) * 0.5)))
+    const fits = Math.round((area / cell) * 0.5)
+    return Math.max(8, Math.round(Math.min(settings.nodeLimit, fits) * (1 + OVERFLOW)))
   })
   // Bottom UI chrome, measured so the sim keeps nodes out of the corners it
   // occupies (measured into bottomChrome; the canvas ends above the bar).
@@ -369,8 +383,12 @@
     // When the digest panel is open it overlays the right edge, so shrink the
     // usable width by the panel so every node stays visible to its left.
     const panelW = showDigest ? Math.min(PANEL_W, w * 0.88) : 0
-    const innerW = Math.max(0, w - 2 * PAD_X - panelW)
-    const innerH = Math.max(0, h - PAD_TOP - Math.max(PAD_BOTTOM, bottomChrome + 8))
+    // Lay out across the WORLD, not the frame: rank is normalised over this
+    // box, so the lowest-ranked land in the reservoir outside the viewport.
+    // Dismiss an on-screen post and every rank shifts, drifting the reservoir
+    // inward -- gravity, with no extra force to tune.
+    const innerW = Math.max(0, w - 2 * PAD_X - panelW) + 2 * bleed.x
+    const innerH = Math.max(0, h - PAD_TOP - Math.max(PAD_BOTTOM, bottomChrome + 8)) + 2 * bleed.y
     const present = new Set(visibleNodes.map((n) => n.uri))
     const postNodes: TreeNode[] = visibleNodes.map((n) => {
       const raw = parentUriOf(n.item)
@@ -394,8 +412,8 @@
     const pillSids = new Set(pills.map((p) => p.sid))
 
     const all = treeTargets(withTopicPills(postNodes, pills), {
-      padX: PAD_X,
-      padTop: PAD_TOP,
+      padX: PAD_X - bleed.x,
+      padTop: PAD_TOP - bleed.y,
       innerW,
       innerH,
       minSize: MIN_SIZE,
@@ -909,7 +927,7 @@
     // Clamp nodes inside the canvas so they can't drift up under the top bar (the
     // graph starts below it, but the sim could otherwise push a node to the edge).
     layout?.setCollision(pill ? pill.gap : null) // rectangles vs circles
-    layout?.setBounds(w, h, 18, Math.max(24, bottomChrome))
+    layout?.setBounds(w, h, 18, Math.max(24, bottomChrome), bleed.x, bleed.y)
     layout?.update(t, links, new Set(pinned), settings.cohesion)
   })
 

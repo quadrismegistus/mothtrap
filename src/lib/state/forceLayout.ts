@@ -107,7 +107,7 @@ export class ForceLayout {
   // the top bar (or off any edge). Set via setBounds; 0 = unbounded.
   // The bottom chrome (gear bottom-left, Digest/Load-more bottom-right) lives in
   // the CORNERS, so a bigger bottom inset is reserved only there — the
-  #bounds = { w: 0, h: 0, top: 0, bottom: 0 }
+  #bounds = { w: 0, h: 0, top: 0, bottom: 0, bleedX: 0, bleedY: 0 }
   #edge = 2
 
   constructor(onTick: () => void) {
@@ -142,18 +142,26 @@ export class ForceLayout {
 
   /** Keep every node fully within the canvas (below `top`, above `bottom`, and
    * inside the left/right edges), respecting its radius. */
-  setBounds(w: number, h: number, top: number, bottom: number) {
-    this.#bounds = { w, h, top, bottom }
+  /**
+   * `bleed` lets nodes live OUTSIDE the visible frame — a reservoir parked just
+   * past each edge. Dismissing an on-screen post re-ranks everything, and the
+   * reservoir's nearest member drifts inward to take its place, instead of a
+   * replacement popping into existence mid-canvas.
+   */
+  setBounds(w: number, h: number, top: number, bottom: number, bleedX = 0, bleedY = 0) {
+    this.#bounds = { w, h, top, bottom, bleedX, bleedY }
   }
   #clamp() {
-    const { w, h, top, bottom } = this.#bounds
+    const { w, h, top, bottom, bleedX, bleedY } = this.#bounds
     if (!w || !h) return
     for (const n of this.#nodes) {
       const hw = n.hw ?? n.r
       const hh = n.hh ?? n.r
       const e = this.#edge
-      if (n.x != null) n.x = Math.max(hw + e, Math.min(w - hw - e, n.x))
-      if (n.y != null) n.y = Math.max(top + hh, Math.min(h - bottom - hh, n.y))
+      // The world extends `bleed` past the frame on every side. Without a bleed
+      // these collapse to the old viewport-bound clamp exactly.
+      if (n.x != null) n.x = Math.max(hw + e - bleedX, Math.min(w + bleedX - hw - e, n.x))
+      if (n.y != null) n.y = Math.max(top + hh - bleedY, Math.min(h - bottom + bleedY - hh, n.y))
     }
   }
 
