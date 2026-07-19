@@ -115,8 +115,11 @@
   // Sized so the ring's AREA is about OVERFLOW of the frame's, which is not the
   // same as making it a pill deep: a perimeter band grows with the perimeter, so
   // a ring "one pill deep" on every side swallowed half the budget and hid it.
+  // Far enough past the edge to put a pill OUT OF SIGHT: a centre at -bleed.x
+  // with bleed.x > half a pill leaves no part of it in frame. Anything less
+  // parks it half-visible on the rim, which is a clipped post, not a reserve.
   const bleed = $derived(
-    pill ? { x: Math.round(pill.w * 0.5), y: Math.round(pill.h * 0.85) } : { x: 0, y: 0 },
+    pill ? { x: Math.round(pill.w * 0.8), y: Math.round(pill.h * 1.1) } : { x: 0, y: 0 },
   )
   /** Half of what geometrically fits: the rest is room for the force layout to
    * spread a conversation rather than tile it. */
@@ -387,8 +390,11 @@
     // box, so the lowest-ranked land in the reservoir outside the viewport.
     // Dismiss an on-screen post and every rank shifts, drifting the reservoir
     // inward -- gravity, with no extra force to tune.
-    const innerW = Math.max(0, w - 2 * PAD_X - panelW) + 2 * bleed.x
-    const innerH = Math.max(0, h - PAD_TOP - Math.max(PAD_BOTTOM, bottomChrome + 8)) + 2 * bleed.y
+    const innerW = bleed.x
+      ? Math.max(0, w - panelW) + 2 * bleed.x
+      : Math.max(0, w - 2 * PAD_X - panelW)
+    const frameH = Math.max(0, h - PAD_TOP - Math.max(PAD_BOTTOM, bottomChrome + 8))
+    const innerH = frameH + 2 * bleed.y
     const present = new Set(visibleNodes.map((n) => n.uri))
     const postNodes: TreeNode[] = visibleNodes.map((n) => {
       const raw = parentUriOf(n.item)
@@ -412,8 +418,8 @@
     const pillSids = new Set(pills.map((p) => p.sid))
 
     const all = treeTargets(withTopicPills(postNodes, pills), {
-      padX: PAD_X - bleed.x,
-      padTop: PAD_TOP - bleed.y,
+      padX: bleed.x ? -bleed.x : PAD_X,
+      padTop: bleed.y ? PAD_TOP - bleed.y : PAD_TOP,
       innerW,
       innerH,
       minSize: MIN_SIZE,

@@ -158,10 +158,19 @@ export class ForceLayout {
       const hw = n.hw ?? n.r
       const hh = n.hh ?? n.r
       const e = this.#edge
-      // The world extends `bleed` past the frame on every side. Without a bleed
-      // these collapse to the old viewport-bound clamp exactly.
-      if (n.x != null) n.x = Math.max(hw + e - bleedX, Math.min(w + bleedX - hw - e, n.x))
-      if (n.y != null) n.y = Math.max(top + hh - bleedY, Math.min(h - bottom + bleedY - hh, n.y))
+      // `bleed` is how far a node's CENTRE may travel past the frame -- not how
+      // far its edge may poke out. Subtracting it from an hw-based inset (the
+      // first attempt) let bleed cancel hw and confined every centre to the
+      // frame anyway, so the reservoir never existed. Parking a node out of
+      // sight needs its centre beyond the edge, hence hw drops out entirely.
+      if (n.x != null)
+        n.x = bleedX
+          ? Math.max(-bleedX, Math.min(w + bleedX, n.x))
+          : Math.max(hw + e, Math.min(w - hw - e, n.x))
+      if (n.y != null)
+        n.y = bleedY
+          ? Math.max(top - bleedY, Math.min(h - bottom + bleedY, n.y))
+          : Math.max(top + hh, Math.min(h - bottom - hh, n.y))
     }
   }
 
