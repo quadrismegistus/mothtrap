@@ -142,6 +142,90 @@ export class ForceLayout {
     )
   }
 
+  /** Bounding box of a set of nodes, including each one's collision padding. */
+  #boxOf(members: SimNode[]) {
+    let l = Infinity
+    let r = -Infinity
+    let t = Infinity
+    let b = -Infinity
+    for (const n of members) {
+      const hw = (n.hw ?? n.r) + this.#edge
+      const hh = (n.hh ?? n.r) + this.#edge
+      l = Math.min(l, n.x! - hw)
+      r = Math.max(r, n.x! + hw)
+      t = Math.min(t, n.y! - hh)
+      b = Math.max(b, n.y! + hh)
+    }
+    return { l, r, t, b }
+  }
+
+  #groups() {
+    const groups = new Map<string, SimNode[]>()
+    for (const n of this.#nodes) {
+      if (n.x == null || n.y == null) continue
+      const key = n.group ?? n.id // an ungrouped post is its own group
+      const g = groups.get(key)
+      if (g) g.push(n)
+      else groups.set(key, [n])
+    }
+    return groups
+  }
+
+  #shift(members: SimNode[], dx: number, dy: number) {
+    for (const n of members) {
+      n.x! += dx
+      n.y! += dy
+      n.tx += dx
+      n.ty += dy
+    }
+  }
+
+  /**
+   * Hold whole conversations apart from each other.
+   *
+   * Collision acts on single posts, so two neighbouring trees interpenetrate and
+   * shove each other member by member -- which reads as bouncing rather than as
+   * two threads finding their places. A tree is one object, so it repels as one:
+   * overlapping bounding boxes are separated along whichever axis they overlap
+   * least, and every member moves by the same amount, leaving the tidy-tree
+   * shape untouched.
+   *
+   * Once per update, on targets as well as positions. Per-tick this would be the
+   * same accumulating shove it is meant to replace.
+   */
+  #separateGroups() {
+    const groups = [...this.#groups().values()].filter((g) => g.length > 1)
+    if (groups.length < 2) return
+    for (let pass = 0; pass < 12; pass++) {
+      let moved = false
+      for (let i = 0; i < groups.length; i++) {
+        for (let j = i + 1; j < groups.length; j++) {
+          const a = this.#boxOf(groups[i])
+          const b = this.#boxOf(groups[j])
+          const ox = Math.min(a.r, b.r) - Math.max(a.l, b.l)
+          if (ox <= 0) continue
+          const oy = Math.min(a.b, b.b) - Math.max(a.t, b.t)
+          if (oy <= 0) continue
+          const acx = (a.l + a.r) / 2
+          const bcx = (b.l + b.r) / 2
+          const acy = (a.t + a.b) / 2
+          const bcy = (b.t + b.b) / 2
+          if (ox < oy) {
+            const push = (bcx < acx ? -1 : 1) * ox * 0.5
+            this.#shift(groups[i], -push, 0)
+            this.#shift(groups[j], push, 0)
+          } else {
+            const push = (bcy < acy ? -1 : 1) * oy * 0.5
+            this.#shift(groups[i], 0, -push)
+            this.#shift(groups[j], 0, push)
+          }
+          moved = true
+        }
+      }
+      if (!moved) break
+    }
+  }
+
   /**
    * Keep a whole conversation on one side of the frame edge.
    *
@@ -154,6 +238,10 @@ export class ForceLayout {
    * A tree too large to fit the frame is left alone. Shoving it wholly outside
    * would hide a conversation the reader can only ever see part of, which is
    * worse than showing part of it.
+   *
+   * Called once per update. It moves targets as well as positions, so it must
+   * NOT run per-tick: doing that accumulated a fresh shift every frame and the
+   * layout visibly bounced while the forces chased it.
    */
   #unstraddleGroups() {
     const { w, h, bleedX, bleedY } = this.#bounds
@@ -277,7 +365,6 @@ export class ForceLayout {
         n.y = this.#unstraddle(n.y, hh + e, h)
       }
     }
-    this.#unstraddleGroups()
   }
 
   /**
@@ -354,6 +441,11 @@ export class ForceLayout {
     }
     this.#nodes = next
     this.#byId = nextById
+    // Once per update, not once per tick. Run from #clamp it re-shifted targets
+    // on every frame, so the forces were chasing a target that kept moving --
+    // which is what the bouncing was.
+    this.#separateGroups()
+    this.#unstraddleGroups()
 
     // Only keep links whose endpoints are present (avoids d3 "node not found").
     const present = nextById
