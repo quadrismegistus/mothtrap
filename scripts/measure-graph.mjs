@@ -72,8 +72,17 @@ const centres = (page) =>
   )
 
 async function boundary(page) {
-  await page.waitForTimeout(15_000) // let the layout settle
-  const r = await page.evaluate(() => {
+  // Sampled twice. A single snapshot cannot tell a tree PARKED in the reservoir
+  // from one still gliding in: backfill keeps delivering conversations, and
+  // each enters from outside, so there are always some in transit.
+  for (const wait of [15_000, 25_000]) {
+    await page.waitForTimeout(wait === 15_000 ? wait : wait - 15_000)
+    console.log(`at ${wait / 1000}s:`, JSON.stringify(await countBoundary(page)))
+  }
+}
+
+function countBoundary(page) {
+  return page.evaluate(() => {
     const W = innerWidth
     const H = innerHeight
     let whole = 0
@@ -96,7 +105,6 @@ async function boundary(page) {
     }
     return { whole, hidden, slicedByTheEdge: sliced, edgesCrossingBoundary: crossing }
   })
-  console.log(JSON.stringify(r, null, 1))
 }
 
 async function arrivals(page) {
