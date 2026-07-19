@@ -136,12 +136,35 @@ function placeIn(sorted: number[], v: number): number {
   return Math.max(0, Math.min(1, lo / (n - 1)))
 }
 
+/**
+ * Share of the time axis kept for posts newer than the snapshot.
+ *
+ * Every post that arrives after the domain was captured is newer than
+ * everything in it, so clamping piled them all on the same pixel column at
+ * x = 1 -- a clump that pushed four posts off screen. The tail spreads them by
+ * timestamp instead.
+ *
+ * Against a FIXED span, not the newest post on hand. Measuring the tail from
+ * the live newest meant every arrival re-normalised every other tail post, and
+ * settling travel went to 9960px -- worse than the relative ranking this whole
+ * mechanism replaced. A post's place in the tail now depends only on its own
+ * timestamp, so arrivals do not move each other.
+ */
+const NEW_TAIL = 0.15
+const NEW_TAIL_SPAN_MS = 3 * 60 * 60 * 1000
+
 /** Same shape as layoutPositions, but against a frozen domain. */
 export function positionsInDomain(nodes: GraphNode[], d: RankDomain): Map<string, NodePosition> {
   const out = new Map<string, NodePosition>()
+  const domainNewest = d.t.length ? d.t[d.t.length - 1] : 0
+
   for (const n of nodes) {
+    const x =
+      n.timestamp <= domainNewest
+        ? placeIn(d.t, n.timestamp) * (1 - NEW_TAIL)
+        : 1 - NEW_TAIL + NEW_TAIL * Math.min(1, (n.timestamp - domainNewest) / NEW_TAIL_SPAN_MS)
     out.set(n.uri, {
-      x: placeIn(d.t, n.timestamp),
+      x,
       y: 1 - placeIn(d.s, n.score),
       sizeRank: placeIn(d.r, replySignal(n)),
     })

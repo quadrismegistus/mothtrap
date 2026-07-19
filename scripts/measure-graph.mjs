@@ -177,7 +177,11 @@ async function settle(page) {
     prev = now
     await page.waitForTimeout(500)
   }
-  console.log(`TOTAL settling travel: ${Math.round(total)}px`)
+  // Per post as well as total: the total sums over whatever is on screen, so a
+  // change that shows MORE posts looks like more churn even when each one is
+  // calmer. That confound made a density win read as a churn regression.
+  const n = Object.keys(prev ?? {}).length || 1
+  console.log(`TOTAL settling travel: ${Math.round(total)}px over ${n} posts = ${Math.round(total / n)}px each`)
 }
 
 const browser = await chromium.launch()
