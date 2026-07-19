@@ -1,0 +1,550 @@
+export interface LayoutNode {
+  id: string
+  /** Semantic target position (px) — where the layout wants this node. */
+  tx: number
+  ty: number
+  /** Radius (px), for collision. */
+  r: number
+  /** Half-extents (px) when the node is a rectangle rather than a circle.
+   * Set only in pill mode; see setCollision. */
+  hw?: number
+  hh?: number
+  group?: string
+  /** Solved position. */
+  x: number
+  y: number
+  /** Held in place this solve: pinned by the user, or under the pointer. */
+  fixed: boolean
+}
+
+export interface Target {
+  id: string
+  tx: number
+  ty: number
+  r: number
+  hw?: number
+  hh?: number
+  group?: string
+}
+
+/**
+ * Deterministic layout solver. Replaces the d3-force simulation.
+ *
+ * At the setting everyone actually used (cohesion 0) the simulation ran only a
+ * pull toward each node's semantic target, a link force at whisper strength,
+ * and a collision pass — arriving at a position a solver can compute exactly,
+ * just seven seconds of alpha decay later. That decay was the load flicker and
+ * the post-arrival friction. Meanwhile the real layout work had migrated into
+ * constraint passes that set positions directly (#separateGroups,
+ * #unstraddleGroups, #clamp) and fought the simulation for the same
+ * coordinates every tick.
+ *
+ * So: one pipeline, run to completion, synchronously.
+ *
+ *   1. seed every node at its semantic target
+ *   2. hold whole conversations apart                         (#separateGroups)
+ *   3. keep each conversation on one side of the frame edge (#unstraddleGroups)
+ *   4. relax pairwise collisions to a fixed point                      (#relax)
+ *   5. clamp to the world, never slicing the visible edge              (#clamp)
+ *
+ * `update()` returns with positions final. Motion is a render concern: the
+ * caller animates from the previously painted positions to the new answer.
+ * Same targets always solve to the same positions — there is no randomness and
+ * no history in the free nodes, so the layout is testable as a pure function.
+ */
+export class Layout {
+  #onChange: () => void
+  #nodes: LayoutNode[] = []
+  #byId = new Map<string, LayoutNode>()
+  // Canvas bounds — see setBounds; 0 = unbounded.
+  #bounds = { w: 0, h: 0, top: 0, bottom: 0, bleedX: 0, bleedY: 0 }
+  #edge = 2
+  /** Pill mode's inter-node gap; null = circular (avatar) collision. */
+  #gap: { x: number; y: number } | null = null
+  #targets: Target[] = []
+  #pinned: ReadonlySet<string> = new Set()
+  /** The node currently under the pointer, held where the drag put it. */
+  #dragId: string | null = null
+
+  constructor(onChange: () => void) {
+    this.#onChange = onChange
+  }
+
+  /** Circles (avatars), or rectangles with the caller's gap (post pills). The
+   * gap comes from the caller so that the collision, the tidy-tree grid and
+   * the node budget all read the same number — three copies of it would drift
+   * apart the first time one was tuned. */
+  setCollision(gap: { x: number; y: number } | null) {
+    // Keep nodes off the canvas edge by the same gap they keep from each other.
+    // 2px is fine for an avatar but leaves a 212px pill flush against the
+    // frame, where it sits on top of the axis labels.
+    this.#edge = gap ? Math.min(gap.x, gap.y) : 2
+    this.#gap = gap
+  }
+
+  /**
+   * `bleed` lets nodes live OUTSIDE the visible frame — a reservoir parked
+   * just past each edge. Dismissing an on-screen post re-ranks everything, and
+   * the reservoir's nearest member moves inward to take its place, instead of
+   * a replacement popping into existence mid-canvas.
+   */
+  setBounds(w: number, h: number, top: number, bottom: number, bleedX = 0, bleedY = 0) {
+    this.#bounds = { w, h, top, bottom, bleedX, bleedY }
+  }
+
+  /** Solve for a new set of targets. Positions are final when this returns. */
+  update(targets: Target[], pinned: ReadonlySet<string> = new Set()) {
+    this.#targets = targets
+    this.#pinned = pinned
+    this.#solve()
+  }
+
+  /** Hold a node at (x, y) while the user drags it; everything else re-solves
+   * around it on every call, so neighbours flow out of the way live. */
+  dragTo(id: string, x: number, y: number) {
+    const n = this.#byId.get(id)
+    if (!n) return
+    this.#dragId = id
+    n.x = x
+    n.y = y
+    this.#solve()
+  }
+
+  /** End a drag. A pinned node stays where it was dropped (it is in the
+   * caller's pinned set, so the seed keeps its position); a free node's next
+   * solve returns it to its semantic spot, and the render tween glides it. */
+  dragEnd(id: string, keepFixed: boolean) {
+    if (this.#dragId === id) this.#dragId = null
+    if (!keepFixed) this.#solve()
+  }
+
+  positions(): Map<string, { x: number; y: number }> {
+    const out = new Map<string, { x: number; y: number }>()
+    for (const n of this.#nodes) out.set(n.id, { x: n.x, y: n.y })
+    return out
+  }
+
+  #solve() {
+    this.#seed()
+    // Iterated, because the two constraints interact: pulling a straddling
+    // tree back inside the frame can drop it onto the neighbour it was just
+    // separated from, and separating two trees can push one back across the
+    // edge. Three rounds settles the realistic cases; it is a fixed bound
+    // rather than a guarantee, and the passes below are the backstop.
+    for (let round = 0; round < 3; round++) {
+      this.#separateGroups()
+      this.#unstraddleGroups()
+    }
+    // Collisions, then bounds — twice, because each can undo the other: the
+    // clamp shifts a boundary group inward onto a neighbour, and separating
+    // that overlap can push a node back over the edge. The second round
+    // resolves what the first created; anything still overlapping after that
+    // is left as-is rather than looped on.
+    for (let round = 0; round < 2; round++) {
+      this.#relax()
+      this.#clamp()
+    }
+    this.#onChange()
+  }
+
+  /**
+   * Reconcile with the current targets, seeding every free node AT its target.
+   *
+   * No history: a free node's outcome depends only on this update's targets,
+   * which is what makes the solve deterministic and idempotent. Only a pinned
+   * or dragged node keeps its previous position — being held somewhere is the
+   * one legitimate piece of state.
+   */
+  #seed() {
+    const { w, h, bleedX, bleedY } = this.#bounds
+    const next: LayoutNode[] = []
+    const nextById = new Map<string, LayoutNode>()
+    for (const t of this.#targets) {
+      const prev = this.#byId.get(t.id)
+      const fixed = this.#pinned.has(t.id) || t.id === this.#dragId
+      // Resolve a lone target that straddles a frame edge before anything
+      // else reads it: half a post is unreadable, and it doesn't read as
+      // "there is more over here" either — it just looks broken. Grouped
+      // targets keep their raw geometry: resolving members one at a time sent
+      // them to opposite sides of the edge, tearing the tree shape before the
+      // group passes ever saw it. A tree resolves as one, in
+      // #unstraddleGroups and #clamp.
+      let tx = t.tx
+      let ty = t.ty
+      if (w && !t.group) {
+        const bhw = (t.hw ?? t.r) + this.#edge
+        const bhh = (t.hh ?? t.r) + this.#edge
+        if (bleedX) tx = this.#unstraddle(this.#unstraddle(tx, bhw, 0), bhw, w)
+        if (bleedY) ty = this.#unstraddle(this.#unstraddle(ty, bhh, 0), bhh, h)
+      }
+      const node: LayoutNode = {
+        id: t.id,
+        tx,
+        ty,
+        r: t.r,
+        hw: t.hw,
+        hh: t.hh,
+        group: t.group,
+        x: fixed && prev ? prev.x : tx,
+        y: fixed && prev ? prev.y : ty,
+        fixed,
+      }
+      next.push(node)
+      nextById.set(t.id, node)
+    }
+    this.#nodes = next
+    this.#byId = nextById
+  }
+
+  /** Resolve a straddled edge to whichever side the centre is already on. */
+  #unstraddle(c: number, half: number, edge: number): number {
+    if (c - half < edge && c + half > edge) return c > edge ? edge + half : edge - half
+    return c
+  }
+
+  /** Bounding box of a group's TARGETS, including each member's padding.
+   * Targets, not positions: a pinned member sits away from its target, and
+   * measuring where it happens to be would make the separation depend on
+   * interaction history rather than on this update's inputs. */
+  #boxOf(members: LayoutNode[]) {
+    let l = Infinity
+    let r = -Infinity
+    let t = Infinity
+    let b = -Infinity
+    for (const n of members) {
+      const hw = (n.hw ?? n.r) + this.#edge
+      const hh = (n.hh ?? n.r) + this.#edge
+      l = Math.min(l, n.tx - hw)
+      r = Math.max(r, n.tx + hw)
+      t = Math.min(t, n.ty - hh)
+      b = Math.max(b, n.ty + hh)
+    }
+    return { l, r, t, b }
+  }
+
+  #groups() {
+    const groups = new Map<string, LayoutNode[]>()
+    for (const n of this.#nodes) {
+      const key = n.group ?? n.id // an ungrouped post is its own group
+      const g = groups.get(key)
+      if (g) g.push(n)
+      else groups.set(key, [n])
+    }
+    return groups
+  }
+
+  /** Move a whole group — targets and positions together, so members do not
+   * have to travel to a place the layout has already decided. */
+  #shift(members: LayoutNode[], dx: number, dy: number) {
+    for (const n of members) {
+      n.tx += dx
+      n.ty += dy
+      n.x += dx
+      n.y += dy
+    }
+  }
+
+  /** A group the passes must not move: it contains a node the user is holding
+   * in place. Everything else moves around it. */
+  #held(members: LayoutNode[]): boolean {
+    return members.some((n) => n.fixed)
+  }
+
+  /**
+   * Hold whole conversations apart from each other.
+   *
+   * Collision acts on single posts, so two neighbouring trees would
+   * interpenetrate and shove each other member by member — which reads as
+   * bouncing rather than as two threads finding their places. A tree is one
+   * object, so it repels as one: overlapping bounding boxes are separated
+   * along whichever axis they overlap least, and every member moves by the
+   * same amount, leaving the tidy-tree shape untouched.
+   */
+  #separateGroups() {
+    const groups = [...this.#groups().values()].filter((g) => g.length > 1)
+    if (groups.length < 2) return
+    for (let pass = 0; pass < 12; pass++) {
+      let moved = false
+      for (let i = 0; i < groups.length; i++) {
+        for (let j = i + 1; j < groups.length; j++) {
+          const gi = groups[i]
+          const gj = groups[j]
+          const iHeld = this.#held(gi)
+          const jHeld = this.#held(gj)
+          if (iHeld && jHeld) continue
+          const a = this.#boxOf(gi)
+          const b = this.#boxOf(gj)
+          const ox = Math.min(a.r, b.r) - Math.max(a.l, b.l)
+          if (ox <= 0) continue
+          const oy = Math.min(a.b, b.b) - Math.max(a.t, b.t)
+          if (oy <= 0) continue
+          const acx = (a.l + a.r) / 2
+          const bcx = (b.l + b.r) / 2
+          const acy = (a.t + a.b) / 2
+          const bcy = (b.t + b.b) / 2
+          if (ox < oy) {
+            const s = bcx < acx ? -1 : 1
+            if (iHeld) this.#shift(gj, s * ox, 0)
+            else if (jHeld) this.#shift(gi, -s * ox, 0)
+            else {
+              this.#shift(gi, -s * ox * 0.5, 0)
+              this.#shift(gj, s * ox * 0.5, 0)
+            }
+          } else {
+            const s = bcy < acy ? -1 : 1
+            if (iHeld) this.#shift(gj, 0, s * oy)
+            else if (jHeld) this.#shift(gi, 0, -s * oy)
+            else {
+              this.#shift(gi, 0, -s * oy * 0.5)
+              this.#shift(gj, 0, s * oy * 0.5)
+            }
+          }
+          moved = true
+        }
+      }
+      if (!moved) break
+    }
+  }
+
+  /**
+   * Keep a whole conversation on one side of the frame edge.
+   *
+   * Resolving posts one at a time leaves every post whole but lets a reply
+   * tree split across the boundary — half a thread in view, half out, with
+   * edges running off into nothing. The group's bounding box decides, and
+   * every member shifts by the same amount, preserving the tidy-tree shape.
+   *
+   * A tree too large to fit the frame is left alone. Shoving it wholly
+   * outside would hide a conversation the reader can only ever see part of,
+   * which is worse than showing part of it.
+   */
+  #unstraddleGroups() {
+    const { w, h, bleedX, bleedY } = this.#bounds
+    if (!bleedX && !bleedY) return
+    for (const members of this.#groups().values()) {
+      if (members.length < 2 || !members[0].group) continue // a lone post resolves in seed/clamp
+      if (this.#held(members)) continue // don't teleport a tree the user is holding
+      let l = Infinity
+      let r = -Infinity
+      let t = Infinity
+      let bm = -Infinity
+      for (const n of members) {
+        const hw = (n.hw ?? n.r) + this.#edge
+        const hh = (n.hh ?? n.r) + this.#edge
+        l = Math.min(l, n.x - hw)
+        r = Math.max(r, n.x + hw)
+        t = Math.min(t, n.y - hh)
+        bm = Math.max(bm, n.y + hh)
+      }
+      let dx = 0
+      let dy = 0
+      if (bleedX && this.#resolvable((r - l) / 2, w)) {
+        if (l < 0 && r > 0) dx = (l + r) / 2 > 0 ? -l : -r
+        else if (l < w && r > w) dx = (l + r) / 2 < w ? w - r : w - l
+      }
+      if (bleedY && this.#resolvable((bm - t) / 2, h)) {
+        if (t < 0 && bm > 0) dy = (t + bm) / 2 > 0 ? -t : -bm
+        else if (t < h && bm > h) dy = (t + bm) / 2 < h ? h - bm : h - t
+      }
+      if (dx || dy) this.#shift(members, dx, dy)
+    }
+  }
+
+  /**
+   * Relax pairwise collisions to a fixed point.
+   *
+   * The body is rectCollide's, converted from velocity space to position
+   * space: each overlapping pair separates along whichever axis it overlaps
+   * least (pills that merely graze side-on shouldn't be flung vertically), by
+   * the full overlap, split between whichever ends are free to move. Iterated
+   * until the worst correction in a pass is under half a pixel or the budget
+   * runs out — on exhaustion the residual overlap is left, not looped on.
+   *
+   * O(n² · passes), which is fine: the graph caps at a few dozen nodes, and a
+   * quadtree would cost more in complexity than it saves.
+   */
+  #relax() {
+    const nodes = this.#nodes
+    for (let pass = 0; pass < 50; pass++) {
+      let worst = 0
+      for (let i = 0; i < nodes.length; i++) {
+        const a = nodes[i]
+        for (let j = i + 1; j < nodes.length; j++) {
+          const b = nodes[j]
+          if (a.fixed && b.fixed) continue
+          worst = Math.max(worst, this.#gap ? this.#relaxRect(a, b) : this.#relaxCircle(a, b))
+        }
+      }
+      if (worst < 0.5) break
+    }
+  }
+
+  /** Apply a separation: the free end moves; two free ends split it. */
+  #push(a: LayoutNode, b: LayoutNode, px: number, py: number) {
+    if (a.fixed) {
+      b.x += px
+      b.y += py
+    } else if (b.fixed) {
+      a.x -= px
+      a.y -= py
+    } else {
+      a.x -= px / 2
+      a.y -= py / 2
+      b.x += px / 2
+      b.y += py / 2
+    }
+  }
+
+  #relaxRect(a: LayoutNode, b: LayoutNode): number {
+    const gap = this.#gap!
+    const dx = b.x - a.x
+    const ox = (a.hw ?? a.r) + (b.hw ?? b.r) + gap.x - Math.abs(dx)
+    if (ox <= 0) return 0
+    const dy = b.y - a.y
+    const oy = (a.hh ?? a.r) + (b.hh ?? b.r) + gap.y - Math.abs(dy)
+    if (oy <= 0) return 0
+    if (ox < oy) {
+      this.#push(a, b, (dx < 0 ? -1 : 1) * ox, 0)
+      return ox
+    }
+    this.#push(a, b, 0, (dy < 0 ? -1 : 1) * oy)
+    return oy
+  }
+
+  #relaxCircle(a: LayoutNode, b: LayoutNode): number {
+    // 9px of breathing room per node, as d3's forceCollide(r + 9) gave.
+    const min = a.r + b.r + 18
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const d2 = dx * dx + dy * dy
+    if (d2 >= min * min) return 0
+    const d = Math.sqrt(d2)
+    if (d < 1e-6) {
+      // Coincident centres: separate along x. The direction is arbitrary but
+      // must be deterministic — same inputs, same layout.
+      this.#push(a, b, min, 0)
+      return min
+    }
+    const o = min - d
+    this.#push(a, b, (dx / d) * o, (dy / d) * o)
+    return o
+  }
+
+  /**
+   * Resolve a span protruding past a content edge, biased toward staying
+   * VISIBLE, and never left sliced by the WINDOW edge.
+   *
+   * Two distinct boundaries, because the chrome keep-outs leave a margin
+   * between them: `inEdge` is where content should stop (visT/visB), and
+   * `outEdge` is where the screen actually ends (0/h). Treating them as one —
+   * pushing a group merely past the content edge — parked it in the visible
+   * margin band with its body run off the bottom of the window: "out" of the
+   * layout's frame, sliced on the reader's screen. Out means past the window.
+   * A group already wholly within the margin band is left alone: visible and
+   * whole, just rubbing shoulders with the chrome. On the x axis the two
+   * edges coincide and the band is empty.
+   *
+   * The bias: deciding by centre alone sends a conversation outside as soon
+   * as more than half hangs over the line, which parked far more than it
+   * needed to — measured, ten of twenty posts. A tree is pushed out only when
+   * little enough of it would show that the sliver is noise, not content.
+   */
+  #resolveBand(lo: number, hi: number, inEdge: number, outEdge: number, insidePositive: boolean): number {
+    const span = hi - lo
+    if (span <= 0) return 0
+    const KEEP_VISIBLE = 0.3
+    if (insidePositive) {
+      if (lo >= inEdge || hi <= outEdge) return 0 // wholly in content, or wholly off-window
+      if (lo >= outEdge && hi <= inEdge) return 0 // wholly within the margin band
+      const fraction = Math.max(0, Math.min(1, (hi - Math.max(lo, inEdge)) / span))
+      return fraction >= KEEP_VISIBLE ? inEdge - lo : outEdge - hi
+    }
+    if (hi <= inEdge || lo >= outEdge) return 0
+    if (hi <= outEdge && lo >= inEdge) return 0
+    const fraction = Math.max(0, Math.min(1, (Math.min(hi, inEdge) - lo) / span))
+    return fraction >= KEEP_VISIBLE ? inEdge - hi : outEdge - lo
+  }
+
+  /** Can both edges of a span be satisfied at once? Below 2x the half-extent
+   * the two resolutions contradict — on a 250px canvas a 138px half pushed a
+   * node off the left edge to clear the right — so it is better to leave it. */
+  #resolvable(half: number, span: number): boolean {
+    return 2 * half <= span
+  }
+
+  /**
+   * Keep every group fully within the world (the frame plus the reservoir on
+   * each side), and never sliced by the visible edge.
+   *
+   * Grouped nodes clamp as a unit: clamping members independently squashed a
+   * parked conversation flat — a four-level thread at y = [-320,-232,-144,-56]
+   * became [-60,-60,-60,-60], destroying the tidy-tree shape the group passes
+   * exist to preserve. Bounds are inviolable, so this moves pinned and
+   * dragged nodes too — a drag below the canvas comes to rest at the floor.
+   */
+  #clamp() {
+    const { w, h, top, bottom, bleedX, bleedY } = this.#bounds
+    if (!w || !h) return
+    const e = this.#edge
+    // The VISIBLE content edges. `top`/`bottom` are the chrome keep-outs, and
+    // a pill resolved against 0/h instead came to rest with its last 20px
+    // behind the Digest bar.
+    const visT = top
+    const visB = h - bottom
+
+    for (const members of this.#groups().values()) {
+      let l = Infinity
+      let r = -Infinity
+      let t = Infinity
+      let b = -Infinity
+      for (const n of members) {
+        const hw = (n.hw ?? n.r) + e
+        const hh = (n.hh ?? n.r) + e
+        l = Math.min(l, n.x - hw)
+        r = Math.max(r, n.x + hw)
+        t = Math.min(t, n.y - hh)
+        b = Math.max(b, n.y + hh)
+      }
+      // The world a group may occupy: the frame plus the reservoir on each
+      // side. The vertical reservoir hangs off the WINDOW edges (0/h), not
+      // the content edges — parking "out" means past the screen, and the
+      // reservoir must be deep enough to hold a group wholly off it.
+      const worldL = bleedX ? -bleedX - (r - l) / 2 : 0
+      const worldR = bleedX ? w + bleedX + (r - l) / 2 : w
+      const worldT = bleedY ? -bleedY - (b - t) / 2 : visT
+      const worldB = bleedY ? h + bleedY + (b - t) / 2 : visB
+
+      let dx = 0
+      let dy = 0
+      if (l < worldL) dx = worldL - l
+      else if (r > worldR) dx = worldR - r
+      if (t < worldT) dy = worldT - t
+      else if (b > worldB) dy = worldB - b
+
+      // Never slice the visible edge: resolve the whole group to one side, but
+      // only when it could fit — shoving an oversized conversation entirely
+      // out of view hides something you can at best see part of.
+      if (bleedX && this.#resolvable((r - l) / 2, w)) {
+        dx += this.#resolveBand(l + dx, r + dx, 0, 0, true)
+        dx += this.#resolveBand(l + dx, r + dx, w, w, false)
+      }
+      if (bleedY && this.#resolvable((b - t) / 2, visB - visT)) {
+        dy += this.#resolveBand(t + dy, b + dy, visT, 0, true)
+        dy += this.#resolveBand(t + dy, b + dy, visB, h, false)
+      }
+
+      for (const n of members) {
+        n.x += dx
+        n.y += dy
+        if (!bleedX) {
+          const hw = (n.hw ?? n.r) + e
+          n.x = Math.max(hw, Math.min(w - hw, n.x))
+        }
+        if (!bleedY) {
+          const hh = (n.hh ?? n.r) + e
+          n.y = Math.max(visT + hh, Math.min(visB - hh, n.y))
+        }
+      }
+    }
+  }
+}

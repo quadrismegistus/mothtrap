@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
-  "description": "A network-map Bluesky client \u2014 Mastotron reborn",
+  "description": "A network-map Bluesky client — Mastotron reborn",
   "scripts": {
     "dev": "vite",
     "build": "svelte-check --tsconfig ./tsconfig.json && vite build",
@@ -22,7 +22,6 @@
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
     "@tauri-apps/cli": "^2.11.4",
     "@tsconfig/svelte": "^5.0.4",
-    "@types/d3-force": "^3.0.10",
     "@types/node": "^26.1.1",
     "fake-indexeddb": "^6.2.5",
     "playwright": "^1.61.1",
@@ -36,7 +35,6 @@
     "@atproto/api": "^0.13.35",
     "@atproto/oauth-client-browser": "^0.4.8",
     "@huggingface/transformers": "^4.2.0",
-    "d3-force": "^3.0.0",
     "idb": "^8.0.3",
     "idb-keyval": "^6.3.0"
   }

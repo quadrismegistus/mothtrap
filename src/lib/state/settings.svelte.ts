@@ -14,11 +14,6 @@ interface Persisted {
   livePoll?: boolean
   connectReplies?: boolean
   replyChains?: boolean
-  /** 0 = posts glued to the recency/engagement axes; 1 = connections pull
-   * connected posts together (loosening the axes). Replaces the old boolean
-   * `clusterForce`, which is still read once for migration. */
-  cohesion?: number
-  clusterForce?: boolean
   curvedEdges?: boolean
   showReposts?: boolean
   followsOnly?: boolean
@@ -37,7 +32,6 @@ export const DEFAULTS = {
   livePoll: true,
   connectReplies: true,
   replyChains: true,
-  cohesion: 0,
   curvedEdges: false,
   showReposts: true,
   followsOnly: false,
@@ -56,6 +50,8 @@ const V1_DEFAULTS: Record<string, unknown> = {
   livePoll: true,
   connectReplies: true,
   replyChains: false,
+  // The cohesion slider is gone (the deterministic solver has no forces to
+  // blend), but the key stays here so migrateV1 strips it from old blobs.
   cohesion: 0,
   curvedEdges: true,
   showReposts: true,
@@ -118,7 +114,6 @@ class Settings {
   livePoll = $state(DEFAULTS.livePoll)
   connectReplies = $state(DEFAULTS.connectReplies)
   replyChains = $state(DEFAULTS.replyChains)
-  cohesion = $state(DEFAULTS.cohesion)
   curvedEdges = $state(DEFAULTS.curvedEdges)
   showReposts = $state(DEFAULTS.showReposts)
   followsOnly = $state(DEFAULTS.followsOnly)
@@ -138,8 +133,6 @@ class Settings {
     if (typeof p.livePoll === 'boolean') this.livePoll = p.livePoll
     if (typeof p.connectReplies === 'boolean') this.connectReplies = p.connectReplies
     if (typeof p.replyChains === 'boolean') this.replyChains = p.replyChains
-    if (typeof p.cohesion === 'number') this.cohesion = Math.max(0, Math.min(1, p.cohesion))
-    else if (p.clusterForce === true) this.cohesion = 1 // migrate old boolean
     if (typeof p.curvedEdges === 'boolean') this.curvedEdges = p.curvedEdges
     if (typeof p.showReposts === 'boolean') this.showReposts = p.showReposts
     if (typeof p.followsOnly === 'boolean') this.followsOnly = p.followsOnly
@@ -159,7 +152,6 @@ class Settings {
           if (this.livePoll !== DEFAULTS.livePoll) data.livePoll = this.livePoll
           if (this.connectReplies !== DEFAULTS.connectReplies) data.connectReplies = this.connectReplies
           if (this.replyChains !== DEFAULTS.replyChains) data.replyChains = this.replyChains
-          if (this.cohesion !== DEFAULTS.cohesion) data.cohesion = this.cohesion
           if (this.curvedEdges !== DEFAULTS.curvedEdges) data.curvedEdges = this.curvedEdges
           if (this.showReposts !== DEFAULTS.showReposts) data.showReposts = this.showReposts
           if (this.followsOnly !== DEFAULTS.followsOnly) data.followsOnly = this.followsOnly
