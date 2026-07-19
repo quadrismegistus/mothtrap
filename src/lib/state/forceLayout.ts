@@ -22,6 +22,7 @@ export interface SimNode extends SimulationNodeDatum {
    * Set only in pill mode; see setCollision. */
   hw?: number
   hh?: number
+  group?: string
 }
 
 export interface Target {
@@ -31,6 +32,7 @@ export interface Target {
   r: number
   hw?: number
   hh?: number
+  group?: string
 }
 
 /**
@@ -141,6 +143,63 @@ export class ForceLayout {
   }
 
   /**
+   * Keep a whole conversation on one side of the frame edge.
+   *
+   * Resolving posts one at a time leaves every post whole but lets a reply tree
+   * split across the boundary -- half a thread in view, half out, with edges
+   * running off into nothing. A tree reads as one object, so it moves as one:
+   * the group's bounding box decides, and every member shifts by the same
+   * amount, which preserves the tidy-tree shape exactly.
+   *
+   * A tree too large to fit the frame is left alone. Shoving it wholly outside
+   * would hide a conversation the reader can only ever see part of, which is
+   * worse than showing part of it.
+   */
+  #unstraddleGroups() {
+    const { w, h, bleedX, bleedY } = this.#bounds
+    if (!bleedX && !bleedY) return
+    const groups = new Map<string, SimNode[]>()
+    for (const n of this.#nodes) {
+      if (!n.group || n.x == null || n.y == null) continue
+      const g = groups.get(n.group)
+      if (g) g.push(n)
+      else groups.set(n.group, [n])
+    }
+    for (const members of groups.values()) {
+      if (members.length < 2) continue // a lone post is already resolved
+      let l = Infinity
+      let r = -Infinity
+      let t = Infinity
+      let bm = -Infinity
+      for (const n of members) {
+        const hw = (n.hw ?? n.r) + this.#edge
+        const hh = (n.hh ?? n.r) + this.#edge
+        l = Math.min(l, n.x! - hw)
+        r = Math.max(r, n.x! + hw)
+        t = Math.min(t, n.y! - hh)
+        bm = Math.max(bm, n.y! + hh)
+      }
+      let dx = 0
+      let dy = 0
+      if (bleedX && r - l <= w) {
+        if (l < 0 && r > 0) dx = (l + r) / 2 > 0 ? -l : -r
+        else if (l < w && r > w) dx = (l + r) / 2 < w ? w - r : w - l
+      }
+      if (bleedY && bm - t <= h) {
+        if (t < 0 && bm > 0) dy = (t + bm) / 2 > 0 ? -t : -bm
+        else if (t < h && bm > h) dy = (t + bm) / 2 < h ? h - bm : h - t
+      }
+      if (!dx && !dy) continue
+      for (const n of members) {
+        n.x! += dx
+        n.y! += dy
+        n.tx += dx // move the target too, or the forces drag it straight back
+        n.ty += dy
+      }
+    }
+  }
+
+  /**
    * Resolve a straddled frame edge: a post is either in the frame or out of it,
    * never sliced by the boundary. Half a post is unreadable, and it doesn't read
    * as "there is more over here" either -- it just looks broken.
@@ -218,6 +277,7 @@ export class ForceLayout {
         n.y = this.#unstraddle(n.y, hh + e, h)
       }
     }
+    this.#unstraddleGroups()
   }
 
   /**
@@ -262,7 +322,7 @@ export class ForceLayout {
         const near = anchorFor(t.id)
         const sx = near?.x != null ? near.x + (Math.random() - 0.5) * 24 : t.tx
         const sy = near?.y != null ? near.y + (Math.random() - 0.5) * 24 : t.ty
-        node = { id: t.id, x: sx, y: sy, tx: t.tx, ty: t.ty, r: t.r, hw: t.hw, hh: t.hh }
+        node = { id: t.id, x: sx, y: sy, tx: t.tx, ty: t.ty, r: t.r, hw: t.hw, hh: t.hh, group: t.group }
       }
       node.tx = t.tx
       node.ty = t.ty
@@ -280,6 +340,7 @@ export class ForceLayout {
       node.r = t.r
       node.hw = t.hw
       node.hh = t.hh
+      node.group = t.group
       // Pinned nodes are fixed at their current position (fx/fy); others are free.
       if (pinned.has(t.id)) {
         node.fx = node.x ?? t.tx

@@ -220,6 +220,9 @@ export interface TreeTarget {
   /** Half-extents, set only in pill mode (see rectCollide in forceLayout). */
   hw?: number
   hh?: number
+  /** The tree this node belongs to (its root's uri). Lets the layout keep a
+   * whole conversation on one side of the frame edge rather than splitting it. */
+  group?: string
 }
 
 /**
@@ -353,7 +356,7 @@ export function treeTargets(nodes: TreeNode[], box: TreeLayoutBox): TreeTarget[]
       tx: rootX + o.dx,
       ty: rootY + o.dy,
       r: (minSize + n.sizeRank * (maxSize - minSize)) / 2, // size stays the node's own
-      ...(pill ? { hw: pill.w / 2, hh: pill.h / 2 } : {}),
+      ...(pill ? { hw: pill.w / 2, hh: pill.h / 2, group: rootUri } : {}),
     }
   })
 }
