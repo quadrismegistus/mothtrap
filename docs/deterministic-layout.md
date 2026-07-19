@@ -1,130 +1,123 @@
 # Replacing the force simulation with a deterministic solver
 
-**Status: provisional.** A plan, not a decision. Nothing here has been built.
-Written at the end of a long session so the next one starts from the diagnosis
-rather than rediscovering it.
+**Status: built**, on `feat/deterministic-layout` (2026-07-19). This document
+was the plan; it now records what was built and where reality differed.
 
 ## Why
 
-Two symptoms, reported from use: the graph **flickers on load**, and there is
-**friction when new posts arrive** — things shuffle for seconds after any
+Two symptoms, reported from use: the graph **flickered on load**, and there was
+**friction when new posts arrived** — things shuffled for seconds after any
 change.
 
-Both come from the same place. `settings.cohesion` defaults to `0` and is never
-moved in practice, and at 0 the simulation runs:
+Both came from the same place. `settings.cohesion` defaulted to `0` and was
+never moved in practice, and at 0 the simulation ran only a pull toward each
+node's semantic target, a link force at whisper strength, and a collision pass
+that was already our own. d3 contributed nothing a deterministic solver could
+not compute exactly — it just arrived there slowly, via `alphaDecay(0.012)`,
+about seven seconds of easing. That easing was the flicker and the friction.
 
-- `forceX` / `forceY` toward each node's semantic target — strength `0.18`
-- `forceLink` at strength `0.02` (the comment in `forceLayout.ts` calls it "a
-  whisper")
-- `forceManyBody` — `null`, not registered at all below `k = 0.05`
-- `collide` — which in pill mode is already **our** `rectCollide`, not d3's
+Meanwhile the layout had grown a constraint solver alongside the simulation
+(`rectCollide`, `#separateGroups`, `#unstraddleGroups`, `#clamp`) that set
+positions directly and fought the sim for the same coordinates every tick.
 
-So at the default setting d3 contributes nothing a deterministic solver cannot
-compute exactly. It just arrives there slowly, via `alphaDecay(0.012)` — about
-seven seconds of easing. That easing is the flicker and the friction.
+## What was built
 
-Meanwhile the layout has grown a constraint solver alongside the simulation:
-`rectCollide`, `#separateGroups`, `#unstraddleGroups`, `#clamp`. These are not
-forces. They set positions directly and overwrite whatever the sim decided. The
-two systems contest the same coordinates, and the constraint layer wins — which
-is why `step()` had to exist for tests (ticking d3 without clamping produces
-positions the app never renders), and why three separate attempts to animate
-arrivals by seeding the simulation all failed: the constraint layer overrode the
-seed every time. The render-layer animation worked first try precisely because
-it sits outside both systems.
-
-## The shape
-
-Lift what already exists into one pure function, and drive it directly.
+`src/lib/state/layout.ts` — class `Layout`, same surface as the old
+`ForceLayout` minus the simulation. One synchronous pipeline:
 
 ```
-solve(targets, links, bounds) → Map<uri, {x, y}>
-  1. seed at semantic targets       — treeTargets, already deterministic
-  2. relax rectangular collisions   — rectCollide's body, iterated to converge
-  3. separate conversations         — #separateGroups, already written
-  4. resolve the frame edge         — #unstraddleGroups, already written
-  5. clamp to the world             — #clamp, already written
+1. seed every node at its semantic target      (lone targets edge-resolved;
+                                                grouped targets left raw — see below)
+2. hold whole conversations apart              (#separateGroups)
+3. keep each conversation on one edge side     (#unstraddleGroups)
+4. relax pairwise collisions to a fixed point  (#relax — rectCollide's body,
+                                                velocity space → position space,
+                                                ≤50 passes or worst move < 0.5px)
+5. clamp to the world, never slicing an edge   (#clamp)
 ```
 
-Then: **solve once, paint the answer, animate the delta.** Motion becomes a
-render concern — interpolate from the previously painted positions to the solved
-ones over ~400ms. The arrival animation already does exactly this and is the one
-piece of motion work in this area that worked on the first attempt.
+`update()` returns with positions final. **Motion is a render concern**:
+`Graph.svelte` tweens the previously painted positions to each new answer over
+400ms (rAF + ease-out cubic — deliberately not CSS transitions, which made
+every node permanently "unstable" to Playwright once before). The tween is
+skipped on the first paint (easing the whole graph in from nothing WAS the
+load flicker), during drags (neighbours must track the pointer live, via a
+re-solve per pointermove), for sub-pixel changes, and under reduced motion.
 
-This is an extension, not a rewrite. Steps 2–5 are written, tested, and shipped.
-What changes is that they stop being applied piecemeal around a simulation that
-keeps disturbing them.
+Free nodes carry **no history** — same targets, same layout, and re-solving
+identical targets moves nothing. Only pinned and dragged nodes keep their
+positions; groups containing one are held still and everything else resolves
+around them. Both properties are unit-tested invariants now
+(`layout.test.ts`, 19 tests, ~4ms — the old file needed hundreds of
+hand-driven ticks).
 
-## What is removed
+### Departures from the plan
 
-- `d3-force` entirely — `forceSimulation`, `forceX/Y`, `forceLink`,
-  `forceManyBody`, `forceCollide`, and the tick loop
-- The cohesion slider, and `settings.cohesion` with it. **Confirmed unused**
-  (kept at 0). This is the only genuinely emergent behaviour being given up:
-  above `k = 0.05` the n-body charge produces clumping a solver would have to
-  approximate rather than reproduce. If it is ever wanted back, it belongs as a
-  pre-pass that adjusts *targets* (pull children toward parents by a fraction),
-  not as an ongoing force.
-- `alphaDecay`, `velocityDecay`, `step()`, and the reheat logic
+- **Both modes at once, not pill-first.** Keeping d3 for avatar mode meant
+  keeping both systems and the contested-coordinates bug class the rewrite
+  exists to kill. Avatar mode is the same math with circles, and the circular
+  relaxation is simpler than the rectangular one.
+- **Grouped targets are no longer edge-resolved one at a time in seed.** The
+  shipped code did this and it tore a tree's shape at the frame edge (members
+  resolved to opposite sides) before the group passes re-cohered it by force.
+  Trees now resolve only as trees; there is a test asserting the internal
+  geometry survives edge resolution exactly.
+- **Content edge ≠ window edge** (found by the boundary probe, live): a group
+  pushed "out" past the content edge (`h` minus the chrome keep-out) parked in
+  the visible margin band with its body run off the bottom of the window —
+  out of the layout's frame, sliced on the reader's screen. `#resolveBand` now
+  takes both edges: *in* means clear of the chrome, *out* means past the
+  window. This latent bug predates the solver (the clamp code was shared) and
+  is very plausibly the "2 sliced conversations" never explained on
+  `feat/stable-x-axis`.
+- `untrack()` around the solve→paint callback: paint reads `positions` to
+  decide whether to tween and is called synchronously inside the update
+  effect — untracked, that read-write is a dependency cycle
+  (`effect_update_depth_exceeded`, the third time this class of bug appeared).
 
-## What this buys beyond the symptoms
+## What was removed
 
-**Testability.** Every defect the three PR reviewers found lived in code whose
-correctness could only be checked by screenshot or by a credentialed browser
-harness. A pure function with fixed iterations is testable in milliseconds.
-`forceLayout.test.ts` already covers the constraint passes; the solver inherits
-those tests almost unchanged.
+- `d3-force` entirely (dependency deleted)
+- The cohesion slider and `settings.cohesion` (confirmed unused; the v1
+  persistence migration still strips the stale key). If clumping is ever
+  wanted back it belongs as a pre-pass that adjusts *targets*, not as a force.
+- `alphaDecay` / `velocityDecay` / `step()` / reheat, and the `Math.random()`
+  jitter in arrival seeding (a pure solver must be deterministic)
 
-**No more contested coordinates.** One system owns positions. The recurring
-class of bug this session — seed something, watch another pass overwrite it —
-stops being possible.
+## Verification (real signed-in timeline, 1280×820)
 
-## Risks and open questions
+| Measure | `main` baseline | solver |
+|---|---|---|
+| Posts whole in frame | 19 | 16 |
+| Parked in reservoir | 2 | 5 |
+| Sliced by the frame edge | 0* | 0 |
+| Reply edges crossing the boundary | 0 | 0 |
+| Settling travel | 533px/post | 396px/post |
+| Arrivals gliding (vs popping) | 6/6 | 3/3 |
 
-- **Convergence.** Relaxation may not fully resolve dense arrangements in fixed
-  iterations. Needs a measured iteration budget and a documented failure mode
-  (leave the overlap, do not loop).
-- **Feel.** The organic settle may be missed. Mitigation: the delta animation is
-  a tuning knob, and easing between solved states may read better than watching
-  a simulation negotiate.
-- **Drag.** Pin the dragged node and re-solve with it fixed. Re-solving per
-  pointer move needs a measured cost; there are ~20 nodes in pill mode.
-- **Scope.** Pill mode first, or avatar mode too? Avatar mode is what is live on
-  mothtrap.blue, so pill-first is the safer order.
-- **Two conversations end up sliced** on `feat/stable-x-axis` (see below) and the
-  cause is unknown. Worth establishing whether the solver makes it moot before
-  chasing it separately.
+\* the first solver run showed 1 sliced — the margin-band bug above, which
+main also has latently; the fixed solver shows 0.
 
-## Verification
+Whole/parked counts are different *timelines* (different days), not a
+regression signal. The settle number needs its usual caveat squared: motion
+now comes in discrete bursts — each one a data change (feed page, digest
+topics, backfill) followed by one 400ms glide — with dead-zero stretches
+between, where the sim used to jostle continuously. The metric sums both the
+same. Eyes beat the number; the screenshots and the flicker judgment are the
+user's call.
 
-The harness is `scripts/measure-graph.mjs`, which needs a real signed-in
-timeline — the demo fixture cannot answer these questions (27 posts against ~21
-planned gave corpus-wide ranking nothing to rank over, and it returned
-byte-identical numbers across changes that mattered).
-
-Baselines to beat, all measured on a real 79-post timeline:
-
-| Measure | Current (`main`) |
-|---|---|
-| Posts whole in frame | 19 |
-| Sliced by the frame edge | 0 |
-| Reply trees split across the edge | 0 |
-| Settling travel | 533px per post |
-
-The solver should take settling travel to approximately **zero** — there is
-nothing to settle — while holding the other three.
-
-Note the settle metric sums over visible posts, so a change that shows more
-posts reads as more churn. It also cannot distinguish a tree gliding to a
-sensible place from one being jostled out of it: it called a genuine improvement
-a 39% regression once. Trust your eyes over it when they disagree.
+One probe artifact worth remembering: headless runs show a post card opening
+with zero interaction, on main and solver builds alike. Playwright's login
+click parks the virtual mouse mid-screen, and Chromium re-evaluates hover with
+a synthetic mousemove when content moves under a static cursor. Not a real-use
+behaviour; not worth chasing.
 
 ## Related state
 
-- `feat/stable-x-axis` — freezes the time axis only (score decays with
-  wall-clock age, so freezing y sank the whole population; timestamps do not).
-  Churn 219px/post against 533. **Not merged:** density is 15/4/2 against 19/2/0,
-  with two conversations sliced for reasons not yet found. The solver may
-  supersede this branch entirely.
+- `feat/stable-x-axis` — froze the time axis to reduce target churn
+  (219px/post vs 533). The solver removes *settle* churn but targets still
+  move on re-rank, so the idea is not moot — re-measure on top of the solver
+  before deciding to revive or delete the branch. Its 2 mystery sliced
+  conversations are likely the margin-band bug, fixed here.
 - PR #38 — merged. Pill mode, the reservoir, pan/zoom, tree cohesion, the
-  render-layer arrival animation.
+  render-layer arrival animation (whose success predicted the tween approach).
