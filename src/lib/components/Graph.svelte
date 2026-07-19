@@ -456,10 +456,15 @@
     })
     const posts: Target[] = []
     const pillMap = new Map<string, Target>()
-    // Topic pills are small labels, not posts: they must not reserve a post
-    // pill's footprint or they shove the conversation apart around themselves.
+    // Topic pills are small labels, not posts. Stripping hw/hh made rectCollide
+    // fall back to `r` on BOTH axes, and r is 52 -- so a label reserved more
+    // VERTICAL room than a post pill does (52 vs 28), shoving conversations
+    // apart around itself, the opposite of the intent. Give them their own
+    // extents instead: wide enough for a label, short because they are one line.
     for (const t of all)
-      pillSids.has(t.id) ? pillMap.set(t.id, { ...t, hw: undefined, hh: undefined }) : posts.push(t)
+      pillSids.has(t.id)
+        ? pillMap.set(t.id, { ...t, hw: pill ? 52 : undefined, hh: pill ? 14 : undefined })
+        : posts.push(t)
     return { posts, pills: pillMap }
   })
   const targets = $derived(treeLayout.posts)

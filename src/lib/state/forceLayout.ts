@@ -126,6 +126,21 @@ export class ForceLayout {
     this.sim.stop()
   }
 
+  /**
+   * Advance the simulation synchronously, clamping as the tick handler does.
+   *
+   * d3's `simulation.tick()` deliberately does NOT dispatch its "tick" event,
+   * so stepping by hand skips the clamp and produces positions the running sim
+   * would never yield. An earlier attempt to settle the first layout by calling
+   * tick() in a loop appeared to achieve nothing for exactly this reason.
+   */
+  step(n = 1) {
+    for (let i = 0; i < n; i++) {
+      this.sim.tick()
+      this.#clamp()
+    }
+  }
+
   /** Circles (avatars), or rectangles with the caller's gap (post pills). Cheap
    * to flip: the sim keeps its nodes and positions, so toggling re-settles
    * rather than restarting. The gap comes from the caller so that the collision,
@@ -142,7 +157,17 @@ export class ForceLayout {
     )
   }
 
-  /** Bounding box of a set of nodes, including each one's collision padding. */
+  /**
+   * Bounding box of a group's TARGETS, including each member's padding.
+   *
+   * Targets, not positions. The passes below run once per update, and update()
+   * resets every tx/ty from the incoming targets first -- so measuring where
+   * nodes happen to have drifted made the result depend on history: a pass
+   * would find no overlap (positions still separated from last time), shift
+   * nothing, and forceX would then drag the groups back together until the next
+   * arrival shoved them apart again. Measuring targets makes each update
+   * deterministic and idempotent.
+   */
   #boxOf(members: SimNode[]) {
     let l = Infinity
     let r = -Infinity
@@ -151,10 +176,10 @@ export class ForceLayout {
     for (const n of members) {
       const hw = (n.hw ?? n.r) + this.#edge
       const hh = (n.hh ?? n.r) + this.#edge
-      l = Math.min(l, n.x! - hw)
-      r = Math.max(r, n.x! + hw)
-      t = Math.min(t, n.y! - hh)
-      b = Math.max(b, n.y! + hh)
+      l = Math.min(l, n.tx - hw)
+      r = Math.max(r, n.tx + hw)
+      t = Math.min(t, n.ty - hh)
+      b = Math.max(b, n.ty + hh)
     }
     return { l, r, t, b }
   }
@@ -171,12 +196,14 @@ export class ForceLayout {
     return groups
   }
 
+  /** Move a whole group's targets, and its positions with them so members do
+   * not have to travel to a place the layout has already decided. */
   #shift(members: SimNode[], dx: number, dy: number) {
     for (const n of members) {
-      n.x! += dx
-      n.y! += dy
       n.tx += dx
       n.ty += dy
+      if (n.x != null) n.x += dx
+      if (n.y != null) n.y += dy
     }
   }
 
@@ -269,11 +296,11 @@ export class ForceLayout {
       }
       let dx = 0
       let dy = 0
-      if (bleedX && r - l <= w) {
+      if (bleedX && this.#resolvable((r - l) / 2, w)) {
         if (l < 0 && r > 0) dx = (l + r) / 2 > 0 ? -l : -r
         else if (l < w && r > w) dx = (l + r) / 2 < w ? w - r : w - l
       }
-      if (bleedY && bm - t <= h) {
+      if (bleedY && this.#resolvable((bm - t) / 2, h)) {
         if (t < 0 && bm > 0) dy = (t + bm) / 2 > 0 ? -t : -bm
         else if (t < h && bm > h) dy = (t + bm) / 2 < h ? h - bm : h - t
       }
@@ -301,6 +328,33 @@ export class ForceLayout {
     return c
   }
 
+  /**
+   * Resolve a span that crosses an edge, biased toward staying VISIBLE.
+   *
+   * Deciding by centre alone sends a conversation outside as soon as more than
+   * half of it hangs over the line, which parked far more than it needed to --
+   * measured, ten of twenty posts. A tree is pushed out only when little enough
+   * of it is showing that the sliver would be noise rather than content.
+   */
+  #resolveSpan(lo: number, hi: number, edge: number, insideIsAbove: boolean): number {
+    const span = hi - lo
+    if (span <= 0) return 0
+    const inside = insideIsAbove
+      ? Math.min(hi, Number.POSITIVE_INFINITY) - Math.max(lo, edge)
+      : Math.min(hi, edge) - lo
+    const fraction = Math.max(0, Math.min(1, inside / span))
+    const KEEP_VISIBLE = 0.3
+    if (fraction >= KEEP_VISIBLE) return insideIsAbove ? edge - lo : edge - hi // pull in
+    return insideIsAbove ? edge - hi : edge - lo // push out
+  }
+
+  /** Can both edges of a span be satisfied at once? Below 2x the half-extent
+   * the two resolutions contradict -- on a 250px canvas a 138px half pushed a
+   * node off the left edge to clear the right -- so it is better to leave it. */
+  #resolvable(half: number, span: number): boolean {
+    return 2 * half <= span
+  }
+
   /** Keep every node fully within the canvas (below `top`, above `bottom`, and
    * inside the left/right edges), respecting its radius. */
   /**
@@ -315,44 +369,75 @@ export class ForceLayout {
   #clamp() {
     const { w, h, top, bottom, bleedX, bleedY } = this.#bounds
     if (!w || !h) return
-    for (const n of this.#nodes) {
-      const hw = n.hw ?? n.r
-      const hh = n.hh ?? n.r
-      const e = this.#edge
-      // A pinned (dragged) node is clamped through fx/fy too, or d3 restores
-      // x = fx at the top of every tick and the rendered pill stops tracking the
-      // cursor near an edge, then jumps the whole hysteresis band the moment the
-      // pointer crosses it.
-      const pinned = n.fx != null && n.fy != null
-      // `bleed` is how far a node's CENTRE may travel past the frame -- not how
-      // far its edge may poke out. Subtracting it from an hw-based inset (the
-      // first attempt) let bleed cancel hw and confined every centre to the
-      // frame anyway, so the reservoir never existed. Parking a node out of
-      // sight needs its centre beyond the edge, hence hw drops out entirely.
-      if (n.x != null)
-        n.x = bleedX
-          ? Math.max(-bleedX, Math.min(w + bleedX, n.x))
-          : Math.max(hw + e, Math.min(w - hw - e, n.x))
-      if (n.y != null)
-        n.y = bleedY
-          ? Math.max(top - bleedY, Math.min(h - bottom + bleedY, n.y))
-          : Math.max(top + hh, Math.min(h - bottom - hh, n.y))
-      // With a reservoir there are real edges to straddle; without one every
-      // node is inside the frame already and there is nothing to resolve.
-      if (bleedX && n.x != null) {
-        n.x = this.#unstraddle(n.x, hw + e, 0)
-        n.x = this.#unstraddle(n.x, hw + e, w)
+    const e = this.#edge
+    // The VISIBLE content edges. `top`/`bottom` are the chrome keep-outs, and a
+    // pill resolved against 0/h instead came to rest with its last 20px behind
+    // the Digest bar -- `bottom` was passed in and then ignored.
+    const visT = top
+    const visB = h - bottom
+
+    // Grouped nodes clamp as a unit. Clamping members independently squashed a
+    // parked conversation flat: a four-level thread at y = [-320,-232,-144,-56]
+    // became [-60,-60,-60,-60], destroying the tidy-tree shape the group passes
+    // exist to preserve, and then rectCollide had to explode it apart again as
+    // it re-entered. Positions only -- targets belong to update(), and moving
+    // them from the tick path is what made the layout oscillate before.
+    for (const members of this.#groups().values()) {
+      let l = Infinity
+      let r = -Infinity
+      let t = Infinity
+      let b = -Infinity
+      for (const n of members) {
+        const hw = (n.hw ?? n.r) + e
+        const hh = (n.hh ?? n.r) + e
+        l = Math.min(l, n.x! - hw)
+        r = Math.max(r, n.x! + hw)
+        t = Math.min(t, n.y! - hh)
+        b = Math.max(b, n.y! + hh)
       }
-      if (bleedY && n.y != null) {
-        // The VISIBLE edges are 0 and h. `top`/`bottom` are chrome keep-outs,
-        // and resolving against those pushed a node clear of the topbar and
-        // straight across y=0 instead -- still sliced, just by a different line.
-        n.y = this.#unstraddle(n.y, hh + e, 0)
-        n.y = this.#unstraddle(n.y, hh + e, h)
+      // The world a group may occupy: the frame plus the reservoir on each side.
+      const worldL = bleedX ? -bleedX - (r - l) / 2 : 0
+      const worldR = bleedX ? w + bleedX + (r - l) / 2 : w
+      const worldT = bleedY ? visT - bleedY - (b - t) / 2 : visT
+      const worldB = bleedY ? visB + bleedY + (b - t) / 2 : visB
+
+      let dx = 0
+      let dy = 0
+      if (l < worldL) dx = worldL - l
+      else if (r > worldR) dx = worldR - r
+      if (t < worldT) dy = worldT - t
+      else if (b > worldB) dy = worldB - b
+
+      // Never slice the visible edge: resolve the whole group to one side, but
+      // only when it could fit -- shoving an oversized conversation entirely out
+      // of view hides something you can at best see part of.
+      if (bleedX && this.#resolvable((r - l) / 2, w)) {
+        if (l + dx < 0 && r + dx > 0) dx += this.#resolveSpan(l + dx, r + dx, 0, true)
+        if (l + dx < w && r + dx > w) dx += this.#resolveSpan(l + dx, r + dx, w, false)
       }
-      if (pinned) {
-        n.fx = n.x
-        n.fy = n.y
+      if (bleedY && this.#resolvable((b - t) / 2, visB - visT)) {
+        if (t + dy < visT && b + dy > visT) dy += this.#resolveSpan(t + dy, b + dy, visT, true)
+        if (t + dy < visB && b + dy > visB) dy += this.#resolveSpan(t + dy, b + dy, visB, false)
+      }
+
+      for (const n of members) {
+        if (n.x != null) n.x += dx
+        if (n.y != null) n.y += dy
+        if (!bleedX && n.x != null) {
+          const hw = (n.hw ?? n.r) + e
+          n.x = Math.max(hw, Math.min(w - hw, n.x))
+        }
+        if (!bleedY && n.y != null) {
+          const hh = (n.hh ?? n.r) + e
+          n.y = Math.max(visT + hh, Math.min(visB - hh, n.y))
+        }
+        // A dragged node is clamped through fx/fy too, or d3 restores x = fx at
+        // the top of every tick and the pill stops tracking the cursor near an
+        // edge, then jumps the hysteresis band when the pointer crosses it.
+        if (n.fx != null && n.fy != null) {
+          n.fx = n.x
+          n.fy = n.y
+        }
       }
     }
   }
@@ -434,8 +519,15 @@ export class ForceLayout {
     // Once per update, not once per tick. Run from #clamp it re-shifted targets
     // on every frame, so the forces were chasing a target that kept moving --
     // which is what the bouncing was.
-    this.#separateGroups()
-    this.#unstraddleGroups()
+    // Iterated, because the two constraints interact: pulling a straddling tree
+    // back inside the frame can drop it onto the neighbour it was just
+    // separated from, and separating two trees can push one back across the
+    // edge. Three rounds settles the realistic cases; it is a fixed bound
+    // rather than a guarantee, and the per-node clamp is the backstop.
+    for (let round = 0; round < 3; round++) {
+      this.#separateGroups()
+      this.#unstraddleGroups()
+    }
 
     // Only keep links whose endpoints are present (avoids d3 "node not found").
     const present = nextById
