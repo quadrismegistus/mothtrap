@@ -126,6 +126,7 @@ export class Layout {
 
   #solve() {
     this.#seed()
+    this.#anchorHeldGroups()
     // Iterated, because the two constraints interact: pulling a straddling
     // tree back inside the frame can drop it onto the neighbour it was just
     // separated from, and separating two trees can push one back across the
@@ -194,6 +195,39 @@ export class Layout {
     }
     this.#nodes = next
     this.#byId = nextById
+  }
+
+  /**
+   * A conversation with a pinned member arranges itself AROUND the pin.
+   *
+   * Revealing a topic pill pins it where it was clicked, but the members'
+   * tidy-tree targets sit at the conversation's semantic spot — which can be
+   * the far side of the canvas. Left unanchored, the pinned root stayed put
+   * while its children seeded away at those targets, stretching the tree
+   * corner to corner. Pinning means "this conversation lives here now", so
+   * the whole group's targets shift to put the pinned node's target at its
+   * held position; free members then seed beside it, and the semantic ranks
+   * survive as the tree's INTERNAL arrangement. A dragged pin is preferred as
+   * the anchor so a held conversation tracks the pointer as one.
+   */
+  #anchorHeldGroups() {
+    for (const members of this.#groups().values()) {
+      if (members.length < 2) continue
+      const pinnedOnes = members.filter((n) => this.#pinned.has(n.id))
+      const anchor = pinnedOnes.find((n) => n.id === this.#dragId) ?? pinnedOnes[0]
+      if (!anchor) continue
+      const dx = anchor.x - anchor.tx
+      const dy = anchor.y - anchor.ty
+      if (!dx && !dy) continue
+      for (const n of members) {
+        n.tx += dx
+        n.ty += dy
+        if (!n.fixed) {
+          n.x = n.tx
+          n.y = n.ty
+        }
+      }
+    }
   }
 
   /** Resolve a straddled edge to whichever side the centre is already on. */

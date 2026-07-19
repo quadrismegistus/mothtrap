@@ -264,6 +264,28 @@ describe('holding nodes in place', () => {
     expect(p.y).toBeCloseTo(400, 0)
   })
 
+  it('arranges a conversation around its pinned member, not at its semantic spot', () => {
+    // Revealing a topic pill pins it where it was clicked, then hands the
+    // solver tidy-tree targets at the conversation's SEMANTIC position —
+    // which can be the far side of the canvas. Unanchored, the pinned root
+    // stayed put while its children seeded away at those targets: a tree
+    // stretched corner to corner, edges running across the whole graph.
+    const l = pillLayout()
+    l.update([node('root', 400, 300)]) // where the user clicked it
+    l.update(
+      [node('root', 900, 400, 'g'), node('kid-a', 770, 490, 'g'), node('kid-b', 1030, 490, 'g')],
+      new Set(['root']),
+    )
+    const root = at(l, 'root')
+    expect(root.x).toBe(400) // the pin held
+    for (const id of ['kid-a', 'kid-b']) {
+      const kid = at(l, id)
+      // Children appear beside the pin (tree spacing), not 700px away at the
+      // semantic target.
+      expect(Math.hypot(kid.x - root.x, kid.y - root.y)).toBeLessThan(300)
+    }
+  })
+
   it('holds a pinned node against target changes, and neighbours flow around it', () => {
     const l = pillLayout()
     l.update([node('n', 600, 400)])

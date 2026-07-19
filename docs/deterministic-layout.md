@@ -70,6 +70,14 @@ hand-driven ticks).
   window. This latent bug predates the solver (the clamp code was shared) and
   is very plausibly the "2 sliced conversations" never explained on
   `feat/stable-x-axis`.
+- **Pinned members anchor their conversation** (`#anchorHeldGroups`, added
+  from use): revealing a topic pill pins it where it was clicked, but the
+  members' tidy-tree targets sit at the conversation's semantic spot — the
+  pinned root stayed put while its children seeded across the canvas, edges
+  stretched corner to corner. A group with a pinned member now shifts its
+  targets so the tree arranges itself around the pin; the semantic ranks
+  survive as the tree's internal arrangement. Dragging a pinned pill moves
+  the whole conversation with it.
 - `untrack()` around the solve→paint callback: paint reads `positions` to
   decide whether to tween and is called synchronously inside the update
   effect — untracked, that read-write is a dependency cycle
