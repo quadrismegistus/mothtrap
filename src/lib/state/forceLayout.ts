@@ -140,6 +140,25 @@ export class ForceLayout {
     )
   }
 
+  /**
+   * Project a point out to the world's boundary, keeping its direction from the
+   * frame's centre. A post bound for the top-right enters from the top-right,
+   * so its arrival reads as coming from where it belongs rather than sliding in
+   * from an arbitrary edge.
+   */
+  #outsideAlong(tx: number, ty: number) {
+    const { w, h, bleedX, bleedY } = this.#bounds
+    const cx = w / 2
+    const cy = h / 2
+    const vx = tx - cx
+    const vy = ty - cy
+    if (!vx && !vy) return { x: cx, y: -bleedY } // dead centre: come from above
+    const kx = vx ? (cx + bleedX) / Math.abs(vx) : Infinity
+    const ky = vy ? (cy + bleedY) / Math.abs(vy) : Infinity
+    const k = Math.min(kx, ky)
+    return { x: cx + vx * k, y: cy + vy * k }
+  }
+
   /** Keep every node fully within the canvas (below `top`, above `bottom`, and
    * inside the left/right edges), respecting its radius. */
   /**
