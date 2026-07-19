@@ -5,7 +5,11 @@
   import {
     buildGraph,
     contextNode,
+    buildRankDomain,
+    domainIsStale,
     layoutPositions,
+    positionsInDomain,
+    type RankDomain,
     parentUriOf,
     rootUriOf,
     threadDescendants,
@@ -356,7 +360,26 @@
    * the reservoir makes moot -- the world is deliberately larger than the frame
    * now, so filling it is no longer the goal.
    */
-  const nodeLayout = $derived(layoutPositions(bleed.x ? graph.nodes : visibleNodes))
+  /**
+   * In reservoir mode, positions come from a FROZEN rank domain.
+   *
+   * Fractional rank is relative, so each post arriving from backfill
+   * re-normalised every other post's rank and the whole graph re-laid itself
+   * out mid-load -- measured as a 1679px burst three seconds in, with more
+   * after. Interpolating into a captured domain lets a new post find its place
+   * among the others without moving them.
+   *
+   * The domain is rebuilt only once the corpus is materially different (see
+   * domainIsStale), because rebuilding on every arrival would restore exactly
+   * the churn this removes. Avatar mode keeps the subset-relative behaviour,
+   * where filling the canvas is still the goal.
+   */
+  let rankDomain: RankDomain | null = null
+  const nodeLayout = $derived.by(() => {
+    if (!bleed.x) return layoutPositions(visibleNodes)
+    if (domainIsStale(rankDomain, graph.nodes)) rankDomain = buildRankDomain(graph.nodes)
+    return positionsInDomain(graph.nodes, rankDomain!)
+  })
 
   const visibleUris = $derived(new Set(visibleNodes.map((n) => n.uri)))
   // A post may be displayed by a node other than itself (run member → run
