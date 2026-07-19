@@ -50,6 +50,7 @@
   const PANEL_W = 340 // DigestPanel width; nodes lay out left of it when open
   const MIN_SIZE = 34
   const MAX_SIZE = 66
+
   const CARD_W = 360
 
   let items = $state<FeedItem[]>([])
@@ -84,12 +85,62 @@
 
   let w = $state(0)
   let h = $state(0)
+
+  // ---- Pill mode (speculative) ---------------------------------------------
+  // Posts render as avatar + opening line instead of a bare avatar, so the graph
+  // can be read without hovering. A pill is roughly four times an avatar's
+  // footprint, so far fewer posts fit — that is the trade, not a side effect.
+  const PILL_H = 56
+  /** Breathing room between pills. Used by the tidy-tree grid, the collision
+   * force and the node budget alike — see ForceLayout.setCollision. */
+  const PILL_GAP = { x: 34, y: 32 }
+  // Narrow canvases get a narrower pill, so a phone still fits one comfortably.
+  // ?pills=1 turns it on without a settings control, so the idea can be looked
+  // at on any build (and screenshotted) before deciding it deserves UI.
+  const pillsParam = typeof location !== 'undefined' && new URLSearchParams(location.search).has('pills')
+  const pill = $derived(
+    settings.postNodes || pillsParam
+      ? // On a phone the pill takes nearly the full width: PAD_X is sized for
+        // avatars, and honouring it here wastes a third of a narrow canvas.
+        { w: Math.round(Math.min(212, Math.max(148, w - 32))), h: PILL_H, gap: PILL_GAP }
+      : undefined,
+  )
+  /**
+   * The reservoir: how far the world extends past each edge of the frame, and
+   * how many extra posts that buys. A ring roughly one pill deep holds about
+   * 40% again of what fits inside, which is enough that several dismissals in a
+   * row still have supply without paying to label posts nobody will see.
+   */
+  const OVERFLOW = 0.4
+  // Sized so the ring's AREA is about OVERFLOW of the frame's, which is not the
+  // same as making it a pill deep: a perimeter band grows with the perimeter, so
+  // a ring "one pill deep" on every side swallowed half the budget and hid it.
+  // Far enough past the edge to put a pill OUT OF SIGHT: a centre at -bleed.x
+  // with bleed.x > half a pill leaves no part of it in frame. Anything less
+  // parks it half-visible on the rim, which is a clipped post, not a reserve.
+  const bleed = $derived(
+    pill ? { x: Math.round(pill.w * 0.8), y: Math.round(pill.h * 1.1) } : { x: 0, y: 0 },
+  )
+  /** Half of what geometrically fits: the rest is room for the force layout to
+   * spread a conversation rather than tile it. */
+  const pillBudget = $derived.by(() => {
+    if (!pill) return settings.nodeLimit
+    // By area, not whole columns: on a narrow canvas the column count rounds
+    // down to 1 and throws away most of the height.
+    const cell = (pill.w + pill.gap.x) * (pill.h + pill.gap.y)
+    const area = Math.max(0, w - 24) * Math.max(0, h - PAD_TOP - 60)
+    const fits = Math.round((area / cell) * 0.5)
+    return Math.max(8, Math.round(Math.min(settings.nodeLimit, fits) * (1 + OVERFLOW)))
+  })
   // Bottom UI chrome, measured so the sim keeps nodes out of the corners it
   // occupies (measured into bottomChrome; the canvas ends above the bar).
   let gearEl = $state<HTMLElement>()
   let hudEl = $state<HTMLElement>()
   // Measured height of the bottom control bar — the canvas ends above it.
   let bottomChrome = $state(0)
+  /** The same bar's top edge WITHOUT the sim's padding, so a panel can sit
+   * flush against it rather than leaving a gap the graph shows through. */
+  let bottomBar = $state(0)
 
   // Live node positions, written by the simulation each tick.
   let positions = $state<Map<string, { x: number; y: number }>>(new Map())
@@ -189,7 +240,7 @@
     return planView(
       convos.filter((c) => c.hasPrimary || forceFull.has(c.id)),
       {
-        budget: settings.nodeLimit,
+        budget: pillBudget,
         // Reply chains OFF = conversations render collapsed unless mapped.
         autoUnrollMax: settings.replyChains ? 10 : 0,
         perAuthorMax: 3,
@@ -290,7 +341,35 @@
     }
     return [...set.values()]
   })
-  const nodeLayout = $derived(layoutPositions(visibleNodes))
+  /**
+   * Rank across the whole corpus in reservoir mode, not just the posts on
+   * screen.
+   *
+   * Ranking the visible subset makes a post's position depend on which OTHER
+   * posts happen to be planned, so dismissing one re-normalises every rank and
+   * the layout re-deals instead of yielding a slot. That defeats the reservoir:
+   * reserved posts can't drift inward if inward keeps moving. Corpus-wide ranks
+   * are stable under dismissal, so a post keeps its place and the queue behaves
+   * like one.
+   *
+   * The subset-scoped version exists to make any subset fill the canvas, which
+   * the reservoir makes moot -- the world is deliberately larger than the frame
+   * now, so filling it is no longer the goal.
+   */
+  /**
+   * Corpus-wide ranking in reservoir mode, so a post's place does not depend on
+   * which OTHER posts happen to be planned.
+   *
+   * A frozen rank domain used to sit here, to stop backfill re-normalising
+   * everyone. It was removed: it froze `score`, which is a rate that DECAYS with
+   * wall-clock age, so over a few hours the whole population slid down the y
+   * axis and only new arrivals reached the top. That is not a tuning problem --
+   * freezing a moving quantity is wrong -- and it came with a NaN-propagation
+   * path, an off-by-one in the interpolation, a staleness test that could never
+   * fire on a shrinking corpus, and no position at all for ghost nodes. The
+   * churn it bought back (38%) is not worth carrying that.
+   */
+  const nodeLayout = $derived(layoutPositions(bleed.x ? graph.nodes : visibleNodes))
 
   const visibleUris = $derived(new Set(visibleNodes.map((n) => n.uri)))
   // A post may be displayed by a node other than itself (run member → run
@@ -335,8 +414,15 @@
     // When the digest panel is open it overlays the right edge, so shrink the
     // usable width by the panel so every node stays visible to its left.
     const panelW = showDigest ? Math.min(PANEL_W, w * 0.88) : 0
-    const innerW = Math.max(0, w - 2 * PAD_X - panelW)
-    const innerH = Math.max(0, h - PAD_TOP - Math.max(PAD_BOTTOM, bottomChrome + 8))
+    // Lay out across the WORLD, not the frame: rank is normalised over this
+    // box, so the lowest-ranked land in the reservoir outside the viewport.
+    // Dismiss an on-screen post and every rank shifts, drifting the reservoir
+    // inward -- gravity, with no extra force to tune.
+    const innerW = bleed.x
+      ? Math.max(0, w - panelW) + 2 * bleed.x
+      : Math.max(0, w - 2 * PAD_X - panelW)
+    const frameH = Math.max(0, h - PAD_TOP - Math.max(PAD_BOTTOM, bottomChrome + 8))
+    const innerH = frameH + 2 * bleed.y
     const present = new Set(visibleNodes.map((n) => n.uri))
     const postNodes: TreeNode[] = visibleNodes.map((n) => {
       const raw = parentUriOf(n.item)
@@ -360,16 +446,25 @@
     const pillSids = new Set(pills.map((p) => p.sid))
 
     const all = treeTargets(withTopicPills(postNodes, pills), {
-      padX: PAD_X,
-      padTop: PAD_TOP,
+      padX: bleed.x ? -bleed.x : PAD_X,
+      padTop: bleed.y ? PAD_TOP - bleed.y : PAD_TOP,
       innerW,
       innerH,
       minSize: MIN_SIZE,
       maxSize: MAX_SIZE,
+      pill,
     })
     const posts: Target[] = []
     const pillMap = new Map<string, Target>()
-    for (const t of all) (pillSids.has(t.id) ? pillMap.set(t.id, t) : posts.push(t))
+    // Topic pills are small labels, not posts. Stripping hw/hh made rectCollide
+    // fall back to `r` on BOTH axes, and r is 52 -- so a label reserved more
+    // VERTICAL room than a post pill does (52 vs 28), shoving conversations
+    // apart around itself, the opposite of the intent. Give them their own
+    // extents instead: wide enough for a label, short because they are one line.
+    for (const t of all)
+      pillSids.has(t.id)
+        ? pillMap.set(t.id, { ...t, hw: pill ? 52 : undefined, hh: pill ? 14 : undefined })
+        : posts.push(t)
     return { posts, pills: pillMap }
   })
   const targets = $derived(treeLayout.posts)
@@ -391,6 +486,53 @@
   )
 
   const placedByUri = $derived(new Map(placed.map((p) => [p.node.uri, p])))
+
+  /**
+   * Which posts are new on screen, so they can be animated IN.
+   *
+   * This is a RENDER concern, deliberately. Three attempts to make arrivals
+   * glide by seeding the simulation off-screen all failed the same way: the
+   * layout continuously reconciles positions AND targets to keep trees whole
+   * and clear of the frame, so a node held away from its target either gets
+   * dragged back (a pop) or has its target dragged out after it (parked in the
+   * reservoir for good). The sim now places an arrival at its final spot
+   * immediately -- nothing to fight -- and the component animates it in from
+   * off-canvas. The layout never knows the animation exists.
+   */
+  const ARRIVAL_MS = 450
+  const arriving = new SvelteSet<string>()
+  const arrivalTimers = new Set<ReturnType<typeof setTimeout>>()
+  $effect(() => () => {
+    for (const t of arrivalTimers) clearTimeout(t)
+    arrivalTimers.clear()
+  })
+  let everPlaced = new Set<string>()
+  let hasPainted = false
+  $effect(() => {
+    const now = new Set(placed.map((p) => p.node.uri))
+    for (const uri of now) {
+      if (everPlaced.has(uri)) continue
+      // The first population has nothing to arrive into; flying the whole graph
+      // in from the edges is the load flicker, not an entrance.
+      if (hasPainted) {
+        arriving.add(uri)
+        arrivalTimers.add(setTimeout(() => arriving.delete(uri), ARRIVAL_MS + 120))
+      }
+    }
+    everPlaced = now
+    hasPainted = true
+  })
+
+  /** Where an arrival comes FROM: outward along its own direction from the
+   * centre, far enough to start off-canvas, so it enters from the side it
+   * belongs to rather than sliding in from an arbitrary edge. */
+  function enterFrom(px: number, py: number) {
+    const vx = px - w / 2
+    const vy = py - h / 2
+    const len = Math.hypot(vx, vy) || 1
+    const reach = Math.hypot(w, h) * 0.55
+    return { x: Math.round((vx / len) * reach), y: Math.round((vy / len) * reach) }
+  }
 
   // Conversation annotations: each digest conversation, tinted over the centroid
   // of its member nodes that are currently on the canvas. A conversation with no
@@ -870,7 +1012,8 @@
     const links = [...visibleEdges.map((e) => ({ source: e.from, target: e.to })), ...topicLinks]
     // Clamp nodes inside the canvas so they can't drift up under the top bar (the
     // graph starts below it, but the sim could otherwise push a node to the edge).
-    layout?.setBounds(w, h, 18, Math.max(24, bottomChrome))
+    layout?.setCollision(pill ? pill.gap : null) // rectangles vs circles
+    layout?.setBounds(w, h, 18, Math.max(24, bottomChrome), bleed.x, bleed.y)
     layout?.update(t, links, new Set(pinned), settings.cohesion)
   })
 
@@ -894,11 +1037,23 @@
     // corner edges, and nodes crossing that x-line flip-flopped between two
     // bottom bounds (sim vs clamp, every tick — visible jitter).
     let inset = 0
+    // The bar's true top edge, kept separate from the sim's keep-out. The
+    // keep-out adds 10px of breathing room, which is right for nodes and wrong
+    // for the digest panel: reusing it left an 18px strip between panel and bar
+    // with the graph showing through.
+    let barTop = 0
     const gr = gearEl?.getBoundingClientRect()
-    if (gr) inset = Math.max(inset, g.bottom - gr.top + 10)
+    if (gr) {
+      barTop = Math.max(barTop, g.bottom - gr.top)
+      inset = Math.max(inset, g.bottom - gr.top + 10)
+    }
     const hr = hudEl?.getBoundingClientRect()
-    if (hr) inset = Math.max(inset, g.bottom - hr.top + 10)
+    if (hr) {
+      barTop = Math.max(barTop, g.bottom - hr.top)
+      inset = Math.max(inset, g.bottom - hr.top + 10)
+    }
     bottomChrome = inset
+    bottomBar = barTop
   })
 
   // Connect replies: pull in the parents of any loaded reply we don't have yet
@@ -1095,9 +1250,92 @@
   // Releasing lets it drift back to its semantic spot — unless it's pinned
   // (by a normal click), in which case it stays where it was dropped.
   let graphEl: HTMLDivElement
-  function onNodeDrag(uri: string, clientX: number, clientY: number) {
+  /**
+   * Pan and zoom. The simulation is untouched -- it keeps working in graph
+   * coordinates and knows nothing about the view -- so panning cannot disturb
+   * the layout the way seeding the sim off-screen did.
+   */
+  const view = $state({ x: 0, y: 0, k: 1 })
+  const ZOOM_MIN = 0.35
+  const ZOOM_MAX = 2.5
+  const atRest = $derived(view.x === 0 && view.y === 0 && view.k === 1)
+
+  /** Screen point -> graph coordinates, the inverse of the layer's transform.
+   * Anything reading pointer positions has to go through this now. */
+  function toGraph(clientX: number, clientY: number) {
     const r = graphEl.getBoundingClientRect()
-    layout?.dragTo(uri, clientX - r.left, clientY - r.top)
+    return { x: (clientX - r.left - view.x) / view.k, y: (clientY - r.top - view.y) / view.k }
+  }
+
+  function recentre() {
+    view.x = 0
+    view.y = 0
+    view.k = 1
+  }
+
+  const CHROME_SELECTOR = '.wrap, .card, .config-wrap, .hud, .panel, .digest-btn, .topic-node, .coverage'
+
+  function onWheel(e: WheelEvent) {
+    if (!graphEl) return
+    // Everything scrollable lives inside .graph -- the post card, the digest
+    // panel, the settings popover. Zooming unconditionally swallowed their
+    // wheel events, so a long card could not be scrolled at all: the graph
+    // zoomed out underneath instead. Every other canvas handler already guards
+    // on the target; this one did not.
+    if ((e.target as HTMLElement).closest(CHROME_SELECTOR)) return
+    e.preventDefault()
+    const r = graphEl.getBoundingClientRect()
+    const px = e.clientX - r.left
+    const py = e.clientY - r.top
+    const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, view.k * Math.exp(-e.deltaY * 0.0015)))
+    // Keep the point under the cursor fixed, so zoom feels like it happens where
+    // you are looking rather than at the origin.
+    view.x = px - ((px - view.x) / view.k) * next
+    view.y = py - ((py - view.y) / view.k) * next
+    view.k = next
+  }
+
+  /** Drag the empty canvas to pan. Nodes, cards and chrome keep their own
+   * handlers -- starting a pan on top of them would fight the drag. */
+  function onCanvasPointerDown(e: PointerEvent) {
+    if (e.button !== 0) return
+    const t = e.target as HTMLElement
+    if (t.closest('.wrap, .card, .config-wrap, .hud, .panel, .digest-btn, .topic-node')) return
+    const startX = e.clientX
+    const startY = e.clientY
+    const baseX = view.x
+    const baseY = view.y
+    let panned = false
+    const move = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX
+      const dy = ev.clientY - startY
+      if (!panned && Math.hypot(dx, dy) < 4) return
+      panned = true
+      view.x = baseX + dx
+      view.y = baseY + dy
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      panRelease = null
+    }
+    // pointercancel matters on touch: the browser can claim a background drag,
+    // and without this the listeners survive with stale start coordinates, so
+    // every later touch re-pans from wherever the abandoned gesture began.
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+    panRelease = up
+  }
+  /** Set while a pan is in flight, so teardown can release a gesture that never
+   * ended -- an unmount mid-drag would otherwise leak the window listeners. */
+  let panRelease: (() => void) | null = null
+  $effect(() => () => panRelease?.())
+
+  function onNodeDrag(uri: string, clientX: number, clientY: number) {
+    const p = toGraph(clientX, clientY)
+    layout?.dragTo(uri, p.x, p.y)
   }
   function onNodeDragEnd(uri: string) {
     layout?.dragEnd(uri, pinned.has(uri))
@@ -1205,14 +1443,61 @@
   // Hover with a short close delay so the pointer can travel from a node to its
   // card (and interact with it) without the card vanishing.
   let clearTimer: ReturnType<typeof setTimeout> | undefined
+  /** Long enough to reach the card from the node without losing it, short
+   * enough that a card doesn't linger once you've moved on. */
+  const GRACE = 260
+  /** Last pointer position, so the clear timer can ask where the pointer IS
+   * rather than infer it from the last enter/leave event it happened to see.
+   * Plain state: only ever read inside a timer, never rendered. */
+  let ptr = { x: -1, y: -1 }
+  $effect(() => {
+    const onMove = (e: PointerEvent) => (ptr = { x: e.clientX, y: e.clientY })
+    window.addEventListener('pointermove', onMove, { passive: true })
+    return () => window.removeEventListener('pointermove', onMove)
+  })
+
   function setHovered(uri: string) {
     clearTimeout(clearTimer)
     hovered = uri
   }
+  /**
+   * Let go of a hovered post only once the pointer is clear of BOTH the node
+   * and its card.
+   *
+   * These two don't touch -- the card is offset from the node it belongs to --
+   * so reaching from one to the other crosses a gap where neither is hovered. A
+   * bare timer turned that into a race the reader could lose just by moving
+   * slowly: the card they were reaching for closed under them. This re-checks
+   * where the pointer actually is when the timer fires, and re-arms while it is
+   * still over either one, so only genuinely leaving both closes the card.
+   */
+  function pointerOverPostOrCard(): boolean {
+    if (ptr.x < 0 || !graphEl) return false
+    // Scoped to THIS graph. Matching '.card' against the whole document also
+    // matched the login card, so after a session expiry the timer kept finding
+    // one and re-arming against a component that no longer exists.
+    return document
+      .elementsFromPoint(ptr.x, ptr.y)
+      .some((el) => graphEl.contains(el) && el.closest('.wrap, .card, .profile-pop'))
+  }
   function scheduleClear() {
     clearTimeout(clearTimer)
-    clearTimer = setTimeout(() => (hovered = null), 140)
+    // Bounded re-arming. The pointer position only updates on pointermove, so a
+    // pointer that leaves the window while over a node leaves `ptr` frozen
+    // inside it -- an unbounded re-arm would then poll elementsFromPoint (which
+    // forces layout) every GRACE ms for the life of the page, and the card would
+    // never close. Ten rounds is far longer than any real reach between a post
+    // and its card.
+    let rounds = 0
+    clearTimer = setTimeout(function tick() {
+      if (rounds++ < 10 && pointerOverPostOrCard()) {
+        clearTimer = setTimeout(tick, GRACE)
+        return
+      }
+      hovered = null
+    }, GRACE)
   }
+  $effect(() => () => clearTimeout(clearTimer))
 
   function onKey(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement) return
@@ -1233,12 +1518,23 @@
 
 <svelte:window onkeydown={onKey} />
 
+<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="graph"
-  style="--bottom-chrome: {bottomChrome}px"
+  role="group"
+  aria-label="Conversation graph"
+  style="--bottom-chrome: {bottomChrome}px; --bottom-bar: {bottomBar}px"
   bind:this={graphEl}
   bind:clientWidth={w}
   bind:clientHeight={h}
+  onwheel={onWheel}
+  onpointerdown={onCanvasPointerDown}
+  ondblclick={(e) => {
+    // Double-click empty canvas to come home. On a node it means something else
+    // already (map replies), so only the background answers.
+    const t = e.target as HTMLElement
+    if (!t.closest('.wrap, .card, .config-wrap, .hud, .panel, .digest-btn, .topic-node')) recentre()
+  }}
   onclickcapture={(e) => {
     // A click on empty canvas (not a node, card, panel, or control) collapses
     // any open/pinned posts. Node/card handlers live on their own elements.
@@ -1252,8 +1548,15 @@
     <div class="axis y-axis">← quieter · louder →</div>
     <div class="axis x-axis">← last active: older · newer →</div>
   {/if}
-  <div class="axis legend"><span class="dot"></span> size = replies</div>
+  <!-- Pills are a fixed size, so the legend would be describing an encoding
+       that is not on screen. -->
+  {#if !pill}
+    <div class="axis legend"><span class="dot"></span> size = replies</div>
+  {/if}
 
+  <!-- Everything that lives in graph coordinates. Pan/zoom transforms this
+       layer only, so the chrome (HUD, gear, digest) stays put. -->
+  <div class="viewport" style="transform: translate({view.x}px, {view.y}px) scale({view.k})">
   <svg class="edges" width={w} height={h}>
     <defs>
       <marker id="reply-arrow" viewBox="0 0 10 10" refX="8" refY="5"
@@ -1296,6 +1599,9 @@
       px={p.px}
       py={p.py}
       size={p.size}
+      {pill}
+      arriving={arriving.has(p.node.uri)}
+      enter={enterFrom(p.px, p.py)}
       hasReplies={(edgeCount.get(p.node.uri) ?? 0) > 0}
       active={hovered === p.node.uri}
       pinned={pinned.has(p.node.uri)}
@@ -1313,13 +1619,19 @@
     />
   {/each}
 
-  <!-- One-off topic labels: a caption tucked just under the post, no pill/edge. -->
+  <!-- One-off topic labels: a caption tucked against the post, no pill/edge.
+       Above it in pill mode, where the label reads as a heading for the text
+       it sits over; below in avatar mode, where there is no text to head.
+       The offset uses the PILL's half-height, not p.size -- that is the avatar
+       diameter, which in pill mode is unrelated to how tall the node is. -->
   {#each placed as p (p.node.uri)}
     {@const cap = nodeCaptions.get(p.node.uri)}
+    {@const half = pill ? pill.h / 2 : p.size / 2}
     {#if cap}
       <div
         class="node-caption"
-        style="left: {p.px}px; top: {p.py + p.size / 2 + 3}px; --c: {cap.color}"
+        class:above={!!pill}
+        style="left: {p.px}px; top: {pill ? p.py - half - 3 : p.py + half + 3}px; --c: {cap.color}"
       >
         {cap.label}
       </div>
@@ -1341,12 +1653,22 @@
     </button>
   {/each}
 
+  </div>
+
+  <!-- Cards render OUTSIDE the transform layer, in screen coordinates.
+       A transform makes its element the containing block for `position: fixed`
+       descendants, so the profile popover and the ⋯ menu -- both of which
+       compute coordinates from getBoundingClientRect() -- were landing ~56px
+       low and then being clipped away by .graph's overflow. That is the very
+       bug the popover was moved to `fixed` to fix, reintroduced by this PR's
+       own pan/zoom layer. Keeping cards out also stops their text scaling with
+       zoom, which is what you want from a reading surface. -->
   {#each cards as c (c.node.uri)}
     <PostCard
       item={c.node.item}
       run={c.node.run}
-      x={c.x}
-      y={c.y}
+      x={c.x * view.k + view.x}
+      y={c.y * view.k + view.y}
       boundsH={h}
       canMapReplies={c.node.isThreadRoot || (c.node.item.post.replyCount ?? 0) > 0}
       repliesMapped={repliesMapped(c.node.item)}
@@ -1523,6 +1845,21 @@
     {#if read.dismissed.size > 0}
       <span class="dismissed-count">{read.dismissed.size} dismissed</span>
     {/if}
+    {#if !atRest}
+      <!-- Only when there is somewhere to come back FROM: a permanent button
+           for a view that has not moved is a control that does nothing. -->
+      <button class="recentre-btn" onclick={recentre} title="Recentre the graph (or double-click the canvas)">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v3M12 19v3M2 12h3M19 12h3"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+          />
+        </svg>
+      </button>
+    {/if}
     <button class="digest-btn" onclick={() => (showDigest ? (showDigest = false) : summarize())} title="Summarize conversations">
       ✦ Digest
     </button>
@@ -1561,6 +1898,18 @@
 </div>
 
 <style>
+  .viewport {
+    position: absolute;
+    inset: 0;
+    /* Transform from the top-left, so graph coordinates map straight through
+       without an origin correction in toGraph(). */
+    transform-origin: 0 0;
+    /* No pointer-events rules here. Forcing them onto the children made the
+       edges SVG -- which spans the whole canvas -- intercept everything and
+       obscure every node under it, so hovers timed out across the suite. The
+       children already declare what they want; the pan handler sits on .graph
+       and reads event.target, so background events reach it by bubbling. */
+  }
   .graph {
     position: relative;
     width: 100%;
@@ -1571,10 +1920,15 @@
     position: absolute;
     inset: 0;
     pointer-events: none;
+    /* The world extends past the frame, and pan/zoom brings it on screen. The
+       SVG is sized w x h, so without this a reply edge out in the reservoir is
+       sliced at the old frame line and its tree renders as loose nodes. */
+    overflow: visible;
   }
   .annotations {
     position: absolute;
     inset: 0;
+    overflow: visible;
     pointer-events: none;
   }
   .annotations path {
@@ -1622,6 +1976,14 @@
       0 1px 3px var(--bg),
       0 0 4px var(--bg);
     z-index: 2;
+  }
+  /* Anchor the caption's BOTTOM to the pill's top, so a label that wraps to two
+     lines grows upward instead of sliding down over the post. Position only --
+     every other declaration belongs to .node-caption and applies in both modes.
+     Splitting the block put them all in here, which left avatar-mode captions
+     unstyled: body-sized, untinted, unclamped, and swallowing pointer events. */
+  .node-caption.above {
+    transform: translate(-50%, -100%);
   }
   .topic-node.pinned {
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 60%, transparent);
@@ -1838,6 +2200,26 @@
   .dismissed-count {
     color: var(--text-dim);
     font-size: 0.78rem;
+  }
+  .recentre-btn {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    color: var(--text-dim);
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .recentre-btn svg {
+    width: 17px;
+    height: 17px;
+  }
+  .recentre-btn:hover {
+    color: var(--text);
+    border-color: var(--accent);
   }
   .digest-btn {
     background: color-mix(in srgb, var(--bg-elev) 88%, transparent);

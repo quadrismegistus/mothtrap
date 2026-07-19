@@ -10,6 +10,13 @@
     px: number
     py: number
     size: number
+    /** Pill mode: render avatar + the opening line of the post, at this fixed
+     * w x h, instead of a bare avatar circle. */
+    pill?: { w: number; h: number }
+    /** Newly on screen: animate it in from `enter` rather than appearing. */
+    arriving?: boolean
+    /** Offset to enter FROM, in container px. */
+    enter?: { x: number; y: number }
     hasReplies: boolean
     active: boolean
     pinned: boolean
@@ -32,6 +39,9 @@
     px,
     py,
     size,
+    pill,
+    arriving = false,
+    enter,
     hasReplies,
     active,
     pinned,
@@ -47,7 +57,35 @@
     ondragend,
   }: Props = $props()
 
+  // Held at the entry offset for one frame, then released so CSS carries it
+  // home. Two rAFs: one to let the offset paint, one to change it -- a single
+  // frame is not reliably enough for the browser to register a transition.
+  // Starts false and stays false until `arriving` turns on, because the graph
+  // only learns a post is new AFTER the template has rendered it. Marking it
+  // landed at mount meant the entrance was already over before it was flagged,
+  // and nothing ever animated. The class needs `arriving` too, so a post that
+  // is never flagged simply never enters.
+  let landed = $state(false)
+  $effect(() => {
+    if (!arriving) return
+    let inner = 0
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => (landed = true))
+    })
+    return () => {
+      cancelAnimationFrame(outer)
+      cancelAnimationFrame(inner)
+    }
+  })
+
   const avatar = $derived(node.item.post.author.avatar)
+  // The pill shows the opening of the post. CSS line-clamps to two lines, so
+  // this only has to stop the DOM carrying a whole thread's worth of text.
+  const preview = $derived.by(() => {
+    const rec = node.item.post.record
+    const text = AppBskyFeedPost.isRecord(rec) ? rec.text.trim() : ''
+    return text.length > 160 ? text.slice(0, 160) + '…' : text
+  })
   const repost = $derived(reposterProfile(node.item))
   // A node is too small to explain itself: it only signals "covered". The
   // reason and the way in live on the card, which has room for both.
@@ -66,7 +104,23 @@
   // release must then not count as a click). Window-level listeners so the
   // drag survives the pointer leaving the node.
   let dragMoved = false
+  // A contextmenu event cannot tell you what produced it -- a long-press on
+  // touch fires the same event as a right-click -- so the pointer type is
+  // recorded here. Dismissing a post someone was only trying to drag would be a
+  // nasty surprise, and on touch the ✕ is already a single tap away.
+  let lastPointerType = 'mouse'
+
+  function onContextMenu(e: MouseEvent) {
+    if (lastPointerType !== 'mouse') return
+    e.preventDefault() // no browser menu over the graph
+    e.stopPropagation()
+    // Ghosts are ancestors resurrected for context and were already dismissed;
+    // they carry no ✕ either.
+    if (!ghost) ondismiss(node.uri)
+  }
+
   function onPointerDown(e: PointerEvent) {
+    lastPointerType = e.pointerType
     if (e.button !== 0) return
     dragMoved = false
     const startX = e.clientX
@@ -90,16 +144,20 @@
 
 <div
   class="wrap"
+  class:pill={!!pill}
+  class:arriving
+  class:entering={arriving && !landed}
   class:active
   class:pinned
   class:ghost
   class:unfollowed
   class:thread={node.isThreadRoot}
-  style="left: {px}px; top: {py}px; width: {size}px; height: {size}px;{accent ? ` --accent-topic: ${accent};` : ''}"
+  style="left: {px}px; top: {py}px; width: {pill ? pill.w : size}px; height: {pill ? pill.h : size}px; --ex: {enter?.x ?? 0}px; --ey: {enter?.y ?? 0}px;{accent ? ` --accent-topic: ${accent};` : ''}"
   role="group"
   onpointerenter={(e) => e.pointerType === 'mouse' && onhover(node.uri)}
   onpointerleave={(e) => e.pointerType === 'mouse' && onhover(null)}
   onpointerdown={onPointerDown}
+  oncontextmenu={onContextMenu}
 >
   {#if repost}
     <span class="reposter" title="Reposted by {repost.name}">
@@ -118,13 +176,23 @@
     onclick={() => !dragMoved && onclick(node)}
     ondblclick={() => !dragMoved && ondblclick(node)}
   >
-    {#if avatar}
-      <img src={avatar} alt={authorName(node.item)} draggable="false" />
-    {:else}
-      <span class="initial">{authorName(node.item).charAt(0).toUpperCase()}</span>
-    {/if}
-    {#if cover.blur}
-      <span class="cover-mark" title={cover.reason} aria-hidden="true">⚠</span>
+    <span class="face">
+      {#if avatar}
+        <img src={avatar} alt={authorName(node.item)} draggable="false" />
+      {:else}
+        <span class="initial">{authorName(node.item).charAt(0).toUpperCase()}</span>
+      {/if}
+      {#if cover.blur}
+        <span class="cover-mark" title={cover.reason} aria-hidden="true">⚠</span>
+      {/if}
+    </span>
+    {#if pill}
+      <span class="say">
+        <span class="who">{authorName(node.item)}</span>
+        <!-- Covered posts stay covered here too: the pill would otherwise print
+             in plain text exactly what the blurred avatar is hiding. -->
+        <span class="text">{cover.blur ? cover.reason : preview}</span>
+      </span>
     {/if}
   </button>
 
@@ -158,6 +226,28 @@
     position: absolute;
     transform: translate(-50%, -50%);
     touch-action: none; /* pointer-drag on touch devices */
+  }
+  /* The transition lives ONLY on a node that is mid-arrival, and disappears with
+     the class when the entrance ends. Left on every node permanently it made
+     nothing ever "stable": Playwright waits for animations to finish before
+     hovering, so every hover in the existing suite timed out -- in avatar mode
+     too, which has no entrance at all.
+
+     Only the entry offset is animated. left/top carry the simulation and are
+     deliberately untransitioned; easing those would lag every tick. */
+  .wrap.arriving {
+    transition:
+      transform 0.45s cubic-bezier(0.22, 0.61, 0.36, 1),
+      opacity 0.45s ease;
+  }
+  .wrap.entering {
+    transform: translate(-50%, -50%) translate(var(--ex), var(--ey));
+    opacity: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .wrap.arriving {
+      transition: none;
+    }
   }
   .node {
     width: 100%;
@@ -259,6 +349,76 @@
     font-weight: 700;
     color: var(--text-dim);
   }
+  /* The avatar lives in its own box so the pill can set text beside it. In
+     circle mode the box just fills the node, so nothing about it changes. */
+  .face {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+  }
+
+  /* ---- Pill mode ---------------------------------------------------------
+     Avatar left, the opening of the post right. Speculative: the graph becomes
+     readable without hovering every node, at the cost of far fewer posts on
+     screen at once. */
+  .wrap.pill .node {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 9px;
+    padding: 0 13px 0 7px;
+    border-radius: 999px;
+    text-align: left;
+  }
+  .wrap.pill .face {
+    flex: 0 0 40px;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+  }
+  /* The reposter chip is sized as a fraction of the node, which on a 212x56
+     pill stretched it into an oval. Fixed px in pill mode. */
+  .wrap.pill .reposter {
+    width: 26px;
+    height: 26px;
+    left: -7px;
+    top: -7px;
+  }
+  /* No double ring in pill mode: at this scale the outer ring reads as a heavy
+     outline rather than a signal. Thread roots keep the accent border colour
+     and the collapsed-count badge. Pinned keeps its ring -- that one marks a
+     state the reader just created, and is worth the weight. */
+  .wrap.pill.thread .node {
+    box-shadow: none;
+  }
+
+  .say {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0; /* without this the text refuses to clamp and the pill bulges */
+  }
+  .who {
+    font-size: 0.62rem;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .say .text {
+    font-size: 0.72rem;
+    line-height: 1.25;
+    color: var(--text);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
   .node {
     position: relative;
     z-index: 1;

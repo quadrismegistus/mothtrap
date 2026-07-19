@@ -208,12 +208,21 @@ export interface TreeLayoutBox {
   innerH: number
   minSize: number
   maxSize: number
+  /** Pill mode: nodes are w x h rectangles rather than circles up to maxSize.
+   * `gap` is the same spacing the collision force uses. */
+  pill?: { w: number; h: number; gap: { x: number; y: number } }
 }
 export interface TreeTarget {
   id: string
   tx: number
   ty: number
   r: number
+  /** Half-extents, set only in pill mode (see rectCollide in forceLayout). */
+  hw?: number
+  hh?: number
+  /** The tree this node belongs to (its root's uri). Lets the layout keep a
+   * whole conversation on one side of the frame edge rather than splitting it. */
+  group?: string
 }
 
 /**
@@ -227,13 +236,15 @@ export interface TreeTarget {
  * Pure (no DOM / reactive state) so the layout math is testable in isolation.
  */
 export function treeTargets(nodes: TreeNode[], box: TreeLayoutBox): TreeTarget[] {
-  const { padX, padTop, innerW, innerH, minSize, maxSize } = box
+  const { padX, padTop, innerW, innerH, minSize, maxSize, pill } = box
   // Grid units must EXCEED a node's collision footprint (r up to maxSize/2 plus
   // the collide padding, doubled for two neighbours) or the tidy tree gets shoved
   // into a tangle by the collision force. Rows are taller than columns are wide
   // so a thread reads top-down as a conversation.
-  const X_UNIT = maxSize + 18
-  const Y_UNIT = maxSize + 30
+  // A pill is wide and short, so its columns need far more room than its rows —
+  // the opposite of the avatar case, where rows are the taller unit.
+  const X_UNIT = pill ? pill.w + pill.gap.x : maxSize + 18
+  const Y_UNIT = pill ? pill.h + pill.gap.y : maxSize + 30
 
   const byUri = new Map(nodes.map((n) => [n.uri, n]))
   const childrenOf = new Map<string, TreeNode[]>()
@@ -345,6 +356,7 @@ export function treeTargets(nodes: TreeNode[], box: TreeLayoutBox): TreeTarget[]
       tx: rootX + o.dx,
       ty: rootY + o.dy,
       r: (minSize + n.sizeRank * (maxSize - minSize)) / 2, // size stays the node's own
+      ...(pill ? { hw: pill.w / 2, hh: pill.h / 2, group: rootUri } : {}),
     }
   })
 }
@@ -383,8 +395,31 @@ export function withTopicPills(posts: TreeNode[], pills: TopicPill[]): TreeNode[
     // it falls back to the caller's centroid like any other under-populated pill.
     // One reparenting member is enough to make a real tree (a pill over a
     // thread root plus its replies). The pathology is specifically ZERO.
-    const attachable = members.filter((u) => !byUri.get(u)!.parent)
-    if (members.length < 2 || attachable.length === 0) continue
+    // Attach the pill above the ROOT of each member's visible tree, not merely
+    // above members that happen to be parentless. Expanding a conversation
+    // pulls a member's ancestors onto the canvas, which GIVES that member a
+    // parent; once the last one had a parent, the pill was skipped entirely and
+    // fell back to the caller's centroid — stranded where it stood with edges
+    // radiating back to its members, which is the pathology described below
+    // arriving by a different route.
+    const rootOf = (u: string) => {
+      let cur = u
+      for (let hops = 0; hops < 64; hops++) {
+        const par = byUri.get(cur)?.parent
+        if (!par || !byUri.has(par)) return cur
+        cur = par
+      }
+      return cur // cycle guard: malformed reply chains shouldn't hang the layout
+    }
+    // Only roots nobody has claimed yet. Without this a pill whose members all
+    // sit inside another pill's thread was still emitted, with zero children:
+    // a synthetic tree root whose whole subtree is itself. That bypasses the
+    // centroid fallback AND consumes a conversation rank, which is exactly the
+    // pathology described above arriving by a new route. The old code gated on
+    // `attachable.length === 0` for this reason; the gate was dropped when the
+    // climb was introduced and nothing replaced it.
+    const roots = [...new Set(members.map(rootOf))].filter((u) => !pillOf.has(u))
+    if (members.length < 2 || roots.length === 0) continue
     let loudest = members[0]
     for (const u of members) if (byUri.get(u)!.y < byUri.get(loudest)!.y) loudest = u
     const a = byUri.get(loudest)!
@@ -396,9 +431,14 @@ export function withTopicPills(posts: TreeNode[], pills: TopicPill[]): TreeNode[
     // precisely the layout the pill-as-tree-root design replaced.
     const newest = members.reduce((t, u) => Math.max(t, byUri.get(u)!.timestamp || 0), 0)
     pillNodes.push({ uri: pill.sid, timestamp: newest, parent: undefined, x: a.x, y: a.y, sizeRank: 1 })
-    for (const u of members) pillOf.set(u, pill.sid)
+    // First pill to claim a root keeps it; `roots` is already filtered to the
+    // unclaimed, so the loser is skipped above rather than emitted childless.
+    for (const u of roots) pillOf.set(u, pill.sid)
   }
-  const reparented = posts.map((p) => (p.parent || !pillOf.has(p.uri) ? p : { ...p, parent: pillOf.get(p.uri) }))
+  // Keyed on pillOf alone. Testing `p.parent` as well skipped a root that
+  // rootOf reached through a dangling parent or a cycle -- the pill claimed it
+  // and then failed to adopt it, leaving the pill childless again.
+  const reparented = posts.map((p) => (pillOf.has(p.uri) ? { ...p, parent: pillOf.get(p.uri) } : p))
   return [...pillNodes, ...reparented]
 }
 

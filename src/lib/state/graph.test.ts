@@ -513,20 +513,28 @@ describe('treeTargets', () => {
     expect(t.ty).toBeCloseTo(500)
   })
 
-  it('does not strand a topic pill in 1970 when it has no reparented members', () => {
-    // Mid-thread members keep their real parent, so a pill can pass the
-    // 2-member gate and still have no children of its own. Its timestamp is
-    // then its whole subtree, and a 0 there ranked it oldest-on-canvas.
+  it('sits above the thread when its members are mid-thread replies', () => {
+    // This case used to skip the pill entirely: mid-thread members keep their
+    // real parent, so the pill had no children and was dropped rather than
+    // become a stranded root. But this is exactly the shape a pill takes after
+    // its conversation is EXPANDED — pulling in a member's ancestors gives that
+    // member a parent — and dropping it left the pill floating where it stood
+    // with edges radiating back across the canvas. It now adopts the root of
+    // its members' tree instead, so it rides above the thread.
     const posts = [
       mk('op', { timestamp: 1000 }),
       mk('r1', { timestamp: 2000, parent: 'op' }),
       mk('r2', { timestamp: 3000, parent: 'op' }),
       mk('other', { timestamp: 4000 }),
     ]
-    // r1/r2 are mid-thread, so neither reparents — the pill would have no
-    // children at all. It is skipped rather than becoming a stranded root.
     const combined = withTopicPills(posts, [{ sid: 'topic:x', members: ['r1', 'r2'] }])
-    expect(combined.find((c) => c.uri === 'topic:x')).toBeUndefined()
+    const px = combined.find((c) => c.uri === 'topic:x')!
+    expect(px).toBeDefined()
+    expect(px.parent).toBeUndefined() // still a tree root
+    expect(combined.find((c) => c.uri === 'op')!.parent).toBe('topic:x') // above the thread
+    expect(combined.find((c) => c.uri === 'r1')!.parent).toBe('op') // replies keep their thread
+    expect(px.timestamp).toBe(3000) // its members' recency, not the epoch
+    expect(combined.find((c) => c.uri === 'other')!.parent).toBeUndefined() // untouched
 
     // A pill over genuine thread ROOTS still becomes a tree, and carries its
     // members' recency rather than the epoch.
@@ -636,6 +644,47 @@ describe('withTopicPills', () => {
     const out = withTopicPills(posts, [{ sid: 'topic:t', members: ['op', 'missing'] }])
     expect(out.some((n) => n.uri === 'topic:t')).toBe(false)
     expect(out.find((n) => n.uri === 'op')!.parent).toBeUndefined()
+  })
+
+  it('gives a shared thread root to the first pill that claims it', () => {
+    // Two conversations whose members live in the SAME thread both climb to the
+    // same root. Without a guard the second would steal it, and the first pill's
+    // edges would radiate across the canvas to members it no longer parents.
+    const posts = [post('op'), post('r1', { parent: 'op' }), post('r2', { parent: 'op' })]
+    const out = withTopicPills(posts, [
+      { sid: 'topic:first', members: ['op', 'r1'] },
+      { sid: 'topic:second', members: ['r1', 'r2'] },
+    ])
+    expect(out.find((n) => n.uri === 'op')!.parent).toBe('topic:first')
+    // The loser is SKIPPED, not drawn childless. This test previously asserted
+    // it was still emitted with zero children, which is the centroid pathology
+    // the pill-as-tree-root design exists to remove -- the test encoded the bug.
+    expect(out.some((n) => n.uri === 'topic:second')).toBe(false)
+  })
+
+  it('survives a malformed reply cycle without hanging', () => {
+    // rootOf climbs parent links; a cycle would spin forever without the guard.
+    const posts = [post('a', { parent: 'b' }), post('b', { parent: 'a' })]
+    const out = withTopicPills(posts, [{ sid: 'topic:t', members: ['a', 'b'] }])
+    expect(out.length).toBeGreaterThan(0)
+    // Whatever the climb settles on, the pill must either adopt it or not be
+    // drawn -- never be emitted as a root with an empty subtree.
+    const pill = out.find((n) => n.uri === 'topic:t')
+    if (pill) expect(out.some((n) => n.parent === 'topic:t')).toBe(true)
+  })
+
+  it('never emits a pill with no children', () => {
+    // The invariant behind both cases above, stated directly.
+    const posts = [post('op'), post('r1', { parent: 'op' }), post('r2', { parent: 'op' })]
+    const out = withTopicPills(posts, [
+      { sid: 'topic:a', members: ['op', 'r1'] },
+      { sid: 'topic:b', members: ['r1', 'r2'] },
+      { sid: 'topic:c', members: ['r2', 'op'] },
+    ])
+    for (const n of out) {
+      if (!n.uri.startsWith('topic:')) continue
+      expect(out.some((m) => m.parent === n.uri)).toBe(true)
+    }
   })
 
   it('leaves non-topic posts untouched', () => {
