@@ -623,23 +623,6 @@
       <span>{interactions.likeCount(p)}</span>
     </button>
 
-    <!-- Private thumbs (#66): local-only, never sent to Bluesky. Separate from
-         the public Like above; feeds the "who to unfollow" tally. -->
-    <button
-      class="act thumb"
-      class:on={pReaction === 'up'}
-      title="Privately like — on-device only, for the unfollow tally"
-      aria-label="Privately like"
-      onclick={() => onrate(p, 'up')}>👍</button
-    >
-    <button
-      class="act thumb"
-      class:on={pReaction === 'down'}
-      title="Privately dislike — on-device only, for the unfollow tally"
-      aria-label="Privately dislike"
-      onclick={() => onrate(p, 'down')}>👎</button
-    >
-
     <div class="more-wrap">
       <button
         class="act more"
@@ -680,6 +663,27 @@
         </div>
       {/if}
     </div>
+  </div>
+
+  <!-- Private thumbs (#66) on their own row: local-only (never sent to Bluesky),
+       kept out of the public action row above so neither is clipped and both are
+       clearly visible. Feeds the "who to unfollow" tally; a tap just toggles. -->
+  <div class="private">
+    <span class="pv-label">Private</span>
+    <button
+      class="pv up"
+      class:on={pReaction === 'up'}
+      title="Privately like — on-device only, for the unfollow tally"
+      aria-label="Privately like"
+      onclick={() => onrate(p, 'up')}>👍</button
+    >
+    <button
+      class="pv down"
+      class:on={pReaction === 'down'}
+      title="Privately dislike — on-device only, for the unfollow tally"
+      aria-label="Privately dislike"
+      onclick={() => onrate(p, 'down')}>👎</button
+    >
   </div>
   {#if modError && !compact}<p class="mod-error">{modError}</p>{/if}
 {/snippet}
@@ -1108,19 +1112,43 @@
   .act.like.on {
     color: var(--danger);
   }
-  /* Private thumbs are emoji (which ignore `color`), so the active state reads
-     through opacity + a filled background instead. */
-  .act.thumb {
-    font-size: 0.9rem;
+  /* Private-reaction row — its own line so the public actions never crowd or
+     clip it, and both thumbs are plainly visible. */
+  .private {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border);
+  }
+  .pv-label {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    margin-right: 0.15rem;
+  }
+  .pv {
+    font-size: 1rem;
     line-height: 1;
-    opacity: 0.5;
+    padding: 0.2rem 0.55rem;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
   }
-  .act.thumb:hover,
-  .act.thumb.on {
-    opacity: 1;
-  }
-  .act.thumb.on {
+  .pv:hover {
     background: var(--bg);
+  }
+  /* Emoji ignore `color`, so the active state reads through border + fill. */
+  .pv.up.on {
+    border-color: #3fb950;
+    background: rgba(63, 185, 80, 0.16);
+  }
+  .pv.down.on {
+    border-color: var(--danger);
+    background: rgba(229, 72, 77, 0.16);
   }
   .repost-wrap:has(.on) .act,
   .act.on {

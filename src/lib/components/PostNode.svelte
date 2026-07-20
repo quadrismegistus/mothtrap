@@ -297,13 +297,17 @@
   .wrap.active {
     z-index: 50;
   }
-  .wrap.active .node {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.35);
-  }
   .wrap.pinned .node {
     border-color: #e0a838;
     box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px #e0a838;
+  }
+  /* The post whose card is showing: a bright gold ring so it's unmistakable
+     which node you're reading (like — but brighter than — the pinned ring).
+     Placed AFTER .pinned (equal specificity) so the DISPLAYED post always shows
+     this ring even when it's also pinned — e.g. opened from the digest panel. */
+  .wrap.active .node {
+    border-color: #ffcf4a;
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 5px #ffcf4a;
   }
   /* Content warning: the avatar is obscured but the node keeps its place, size
      and edges, so the conversation's shape survives intact. */

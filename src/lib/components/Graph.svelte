@@ -1696,9 +1696,18 @@
     if (total > budget) turnoverOffset = (turnoverOffset + budget) % total
   }
 
-  // Placed nodes left→right along the time axis (older → newer).
+  // ON-SCREEN placed nodes, left→right along the time axis (older → newer).
+  // Scoped to the visible frame so keyboard/swipe navigation only ever steps to
+  // posts you can actually see — a node panned/zoomed off-frame (screen pos
+  // outside 0..w × 0..h after the view transform) is not a nav target.
   function timeOrder() {
-    return [...placed].sort((a, b) => a.px - b.px)
+    return [...placed]
+      .filter((p) => {
+        const sx = p.px * view.k + view.x
+        const sy = p.py * view.k + view.y
+        return sx >= 0 && sx <= w && sy >= 0 && sy <= h
+      })
+      .sort((a, b) => a.px - b.px)
   }
 
   // Move the selection along the time axis (x): dir -1 = older/left, +1 =
@@ -1716,6 +1725,21 @@
           : 0
         : Math.max(0, Math.min(order.length - 1, cur + dir))
     setHovered(order[next].node.uri)
+  }
+
+  // Rate the hovered post AND advance to the next post (the y/n & ↑/↓ keyboard
+  // fast-sweep). The next uri is captured BEFORE react() dismisses this one (and
+  // its reply subtree — skip the doomed set), then re-selected, so a sweep flows
+  // post→post without reaching for the mouse. On-screen only (via timeOrder).
+  function rateAndAdvance(uri: string, kind: ReactionKind) {
+    const order = timeOrder()
+    const i = order.findIndex((p) => p.node.uri === uri)
+    const gone = new Set([uri, ...threadDescendants(allItems, uri)])
+    const survivor = (list: typeof order) => list.find((p) => !gone.has(p.node.uri))?.node.uri ?? null
+    const nextUri =
+      i === -1 ? null : (survivor(order.slice(i + 1)) ?? survivor(order.slice(0, i).reverse()))
+    react(uri, kind)
+    if (nextUri) setHovered(nextUri)
   }
 
   // Card horizontal swipe (#72, reworked): ← previous post, → next. Navigates
@@ -1810,18 +1834,19 @@
       showConfig = false
     } else if (k === 'd' && hoveredTopic) dismissTopic(hoveredTopic)
     else if (k === 'd' && hovered) dismiss(hovered)
-    // Thumbs on the hovered post: y = up, n = down. `n` keeps its no-hover
-    // meaning (nextBatch) — same hover-scoped overload the `d` key already uses.
-    else if (k === 'y' && hovered) react(hovered, 'up')
-    else if (k === 'n' && hovered) react(hovered, 'down')
-    // Arrow keys: ←/→ walk the timeline, ↑/↓ rate the selected post (aliases of
-    // y/n, so they also dismiss). preventDefault stops the page from scrolling.
+    // Thumbs on the hovered post: y = up, n = down — rate, dismiss, and ADVANCE
+    // to the next post (a fast triage sweep). `n` keeps its no-hover meaning
+    // (nextBatch) — same hover-scoped overload the `d` key uses.
+    else if (k === 'y' && hovered) rateAndAdvance(hovered, 'up')
+    else if (k === 'n' && hovered) rateAndAdvance(hovered, 'down')
+    // Arrow keys: ←/→ walk the timeline; ↑/↓ rate + advance (aliases of y/n).
+    // preventDefault stops the page from scrolling.
     else if (e.key === 'ArrowUp' && hovered) {
       e.preventDefault()
-      react(hovered, 'up')
+      rateAndAdvance(hovered, 'up')
     } else if (e.key === 'ArrowDown' && hovered) {
       e.preventDefault()
-      react(hovered, 'down')
+      rateAndAdvance(hovered, 'down')
     } else if (e.key === 'ArrowRight') {
       e.preventDefault()
       navigate(1)
