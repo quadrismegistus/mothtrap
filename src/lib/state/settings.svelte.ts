@@ -117,7 +117,12 @@ class Settings {
 
   constructor() {
     const p = load()
-    if (typeof p.density === 'number') this.density = p.density
+    // Clamp to the slider's range on load: the derived budget already clamps its
+    // own output, but a hand-edited/corrupt blob shouldn't leave `density` itself
+    // out of [0.5, 2.5] for any future raw reader. Keep in sync with the slider.
+    if (typeof p.density === 'number' && Number.isFinite(p.density)) {
+      this.density = Math.min(2.5, Math.max(0.5, p.density))
+    }
     if (p.selectMode === 'top' || p.selectMode === 'recent' || p.selectMode === 'mix') {
       this.selectMode = p.selectMode
     }

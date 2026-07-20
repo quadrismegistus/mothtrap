@@ -133,7 +133,10 @@ test('connect-replies draws edges for small threads by default', async ({ page }
 })
 
 test('a reposted node shows the reposter avatar', async ({ page }) => {
-  // The demo's one repost can fall outside the viewport-scaled default window.
+  // Max density so the whole small demo corpus clears the (now viewport-derived)
+  // budget at the fixed CI viewport — the repost is otherwise outside the window.
+  // NB this relies on the CI viewport staying large enough; a much smaller one
+  // could drop budget below the demo's post count. See budget in Graph.svelte.
   await page.addInitScript(() => localStorage.setItem('skynets.settings', JSON.stringify({ v: 2, density: 2.5 })))
   await graphReady(page)
   expect(await page.locator('.reposter').count()).toBeGreaterThan(0)
@@ -278,7 +281,8 @@ test('dragging moves a node without pinning; a click pins it', async ({ page }) 
 })
 
 test('Reply chains is on by default; turning it off collapses the chain', async ({ page }) => {
-  // Room for the demo thread's whole chain under the viewport-scaled default.
+  // Max density so the demo thread's whole chain clears the viewport-derived
+  // budget at the CI viewport (viewport-dependent — see the repost test's note).
   await page.addInitScript(() => localStorage.setItem('skynets.settings', JSON.stringify({ v: 2, density: 2.5 })))
   await graphReady(page)
   const edgesBefore = await page.locator('.edges path').count()
@@ -296,8 +300,9 @@ test('a previously-dismissed ancestor returns as a dimmed ghost for its chain', 
   // Seed the read store (idb-keyval) with the demo thread ROOT dismissed —
   // as if read in an earlier session — while its replies remain visible.
   // Every visible reply must still get its chain: the root comes back dimmed.
-  // Room for the whole thread under the viewport-scaled default, so the
-  // dismissed root's replies are definitely on screen.
+  // Max density so the whole thread clears the viewport-derived budget at the CI
+  // viewport (viewport-dependent — see the repost test's note), so the dismissed
+  // root's replies are definitely on screen.
   await page.addInitScript(() => localStorage.setItem('skynets.settings', JSON.stringify({ v: 2, density: 2.5 })))
   // Seeded from a static same-origin page so the write COMPLETES before the
   // app boots (an addInitScript put races the app's read.load()).
@@ -443,8 +448,8 @@ test('hovering a card avatar opens a profile preview', async ({ page }) => {
 })
 
 test('hovering the reposter name opens a profile preview', async ({ page }) => {
-  // The viewport-scaled default count can leave the demo's one repost outside
-  // the window; pre-tune density high, as a user would, so it's in range.
+  // Max density so the demo's one repost clears the viewport-derived budget at
+  // the CI viewport (viewport-dependent — see the repost test's note).
   await page.addInitScript(() => localStorage.setItem('skynets.settings', JSON.stringify({ v: 2, density: 2.5 })))
   await graphReady(page)
   const rep = page.locator('.wrap:has(.reposter)').first()

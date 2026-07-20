@@ -130,12 +130,18 @@
    * the old fixed 0–60 count could not):
    *
    * - Pills tile, so this is a real packing estimate: half of what geometrically
-   *   fits (the rest is spread room for the solver) plus the reservoir ring.
+   *   fits (the rest is spread room for the solver) plus the reservoir ring. This
+   *   runs DENSER than the old ?pills=1 default (which capped at the Count value),
+   *   by design — one density knob now governs both modes; drag it down if cramped.
    * - Avatars don't tile — a conversation spreads out — so it's a UX target, the
-   *   megapixel heuristic the Count default used (~30 on a 1080p screen).
+   *   same megapixel heuristic the Count default used (~30 on a 1080p screen).
+   *   NB w/h are the CANVAS (below the topbar), so at density 1 this lands ~1–2
+   *   short of the old window-based default, not exactly on it.
    *
    * Clamped [8, 60]: the floor keeps a phone usable, the ceiling caps label/DOM
-   * cost on a 4K display (raise if "fill the space" should mean literally fill).
+   * cost. Because density is a multiplier, a fixed ceiling means the top of the
+   * slider is inert on large/hi-DPI displays (comfortable already ≈ the cap) —
+   * raise or area-scale the ceiling if "fill the space" should mean literally fill.
    */
   const budget = $derived.by(() => {
     let base: number
