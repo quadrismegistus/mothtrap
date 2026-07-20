@@ -3,6 +3,7 @@ import { mkPost } from '../testing'
 import { postScoreRate } from './score'
 import { buildConversations, planView } from './conversations'
 import {
+  ancestryHeld,
   buildGraph,
   climbChain,
   layoutPositions,
@@ -470,6 +471,37 @@ describe('climbChain', () => {
     const into = new Map([['c', nodes.c]])
     climbChain([nodes.c], into, parentOf, (n) => n.uri === 'b') // b is c's immediate parent
     expect([...into.keys()].sort()).toEqual(['c']) // b, a, root all gone
+  })
+})
+
+describe('ancestryHeld (admissibility gate, #46)', () => {
+  const m = (uri: string, parent?: string) => ({ post: { uri }, _parent: parent })
+  const parentOf = (x: { _parent?: string }) => x._parent
+  const S = (...u: string[]) => new Set(u)
+
+  it('holds a conversation whose member has a missing, not-yet-fetched parent', () => {
+    const members = [m('reply', 'parent')] // parent not present, not settled
+    expect(ancestryHeld(members, S('reply'), S(), parentOf)).toBe(true)
+  })
+
+  it('admits once the parent is present (fetch landed)', () => {
+    const members = [m('reply', 'parent')]
+    expect(ancestryHeld(members, S('reply', 'parent'), S(), parentOf)).toBe(false)
+  })
+
+  it('admits a still-missing parent once the fetch has SETTLED (deleted/blocked never arrives)', () => {
+    const members = [m('reply', 'gone')]
+    expect(ancestryHeld(members, S('reply'), S('reply'), parentOf)).toBe(false)
+  })
+
+  it('a root member (no parent) never holds', () => {
+    expect(ancestryHeld([m('root')], S('root'), S(), parentOf)).toBe(false)
+  })
+
+  it('one member with a mid-chain gap holds the WHOLE conversation', () => {
+    // root present; a present, all resolved except `mid` whose parent isn't loaded.
+    const members = [m('root'), m('mid', 'above'), m('leaf', 'mid')]
+    expect(ancestryHeld(members, S('root', 'mid', 'leaf'), S(), parentOf)).toBe(true)
   })
 })
 
