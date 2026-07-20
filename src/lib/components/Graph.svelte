@@ -1708,9 +1708,17 @@
     if (
       t instanceof HTMLInputElement ||
       t instanceof HTMLTextAreaElement ||
+      t instanceof HTMLSelectElement ||
       (t instanceof HTMLElement && t.isContentEditable)
     )
       return
+    // A blocking modal (Settings, Compose, Report, Help, digest consent, the
+    // reactions panel) renders a full-screen `.backdrop`. While one is open the
+    // graph sits behind it — don't let a keyboard-set `hovered` (which persists,
+    // unlike a pointer hover) get navigated/rated/dismissed underneath it, and
+    // leave the modal's own arrow/Escape keys alone. Side panels (digest, the
+    // config popover) have no backdrop, so shortcuts still work alongside them.
+    if (document.querySelector('.backdrop')) return
     const k = e.key.toLowerCase()
     if (e.key === 'Escape') {
       hovered = null
