@@ -206,6 +206,137 @@ export function parentUriOf(item: FeedItem): string | undefined {
  * rank, y = engagement rank (inverted so loudest is at top), size = engagement
  * rank. Overlaps are separated by the force sim's collision, so no jitter needed.
  */
+/**
+ * A frozen snapshot of the TIME axis only.
+ *
+ * An earlier attempt froze both axes to stop background backfill re-normalising
+ * every post's rank. It had to be removed: `score` is a rate that decays with
+ * wall-clock age, so freezing it made the whole population slide down the y
+ * axis until only new arrivals reached the top. Timestamps do not decay, so x
+ * can be frozen safely and y left live — which is where the stability was
+ * wanted anyway, since x is the axis backfill disturbs.
+ */
+export interface TimeDomain {
+  /** Ascending, finite timestamps only. */
+  t: number[]
+  min: number
+  max: number
+}
+
+export function buildTimeDomain(nodes: GraphNode[]): TimeDomain {
+  // Non-finite values are dropped rather than sorted. A single NaN makes every
+  // comparison in the sort return NaN, which leaves the array UNSORTED and
+  // breaks the binary search for every post, not just the bad one. createdAt is
+  // attacker-controlled, so this is reachable with one malformed post.
+  const t = nodes.map((n) => n.timestamp).filter(Number.isFinite).sort((a, b) => a - b)
+  return { t, min: t[0] ?? 0, max: t[t.length - 1] ?? 0 }
+}
+
+/**
+ * Rebuild when the domain no longer describes the corpus — measured by how many
+ * posts fall outside its range, not by how the node COUNT has changed.
+ *
+ * Counting nodes was wrong twice over: it could never fire on a shrinking
+ * corpus (|n - size| / size can't exceed 1 as n falls), and `graph.nodes` counts
+ * DISPLAY nodes, so expanding one thread doubled it and triggered a full
+ * re-layout from a single click.
+ */
+export function timeDomainIsStale(d: TimeDomain | null, nodes: GraphNode[]): boolean {
+  if (!d || d.t.length < 2) return true
+  let outside = 0
+  let seen = 0
+  for (const n of nodes) {
+    if (!Number.isFinite(n.timestamp)) continue
+    seen++
+    if (n.timestamp < d.min || n.timestamp > d.max) outside++
+  }
+  return seen > 0 && outside / seen > 0.4
+}
+
+/** Fraction of the domain strictly below `v`, in [0,1]. */
+function timeRank(d: TimeDomain, v: number): number {
+  const n = d.t.length
+  if (n < 2) return 0.5
+  let lo = 0
+  let hi = n
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (d.t[mid] <= v) lo = mid + 1
+    else hi = mid
+  }
+  // (lo - 1) / (n - 1) matches fractionalRanks: smallest maps to 0, largest to
+  // 1. Using lo/(n-1) shifted everything up a rank, so the top TWO saturated.
+  if (lo <= 0) return 0
+  if (lo >= n) return 1
+  // Interpolated between the bracketing pair, not snapped to the lower one. The
+  // domain is fixed while new posts keep arriving BETWEEN its values, and
+  // stepwise ranks would stack every one of them onto its neighbour's exact
+  // column -- worst on a small domain, where a post halfway between the only
+  // two entries landed on the older one.
+  const lower = d.t[lo - 1]
+  const upper = d.t[lo]
+  const within = upper > lower ? (v - lower) / (upper - lower) : 0
+  return Math.max(0, Math.min(1, (lo - 1 + within) / (n - 1)))
+}
+
+/**
+ * Share of the x axis reserved for posts newer than the snapshot.
+ *
+ * Every point of tail compresses the head, packing conversations closer, so a
+ * narrower tail ought to help the two conversations that end up too wide to
+ * resolve against the frame edge. Measured, it does the opposite: at 0.12 the
+ * split went 15/4/2 -> 12/7/2 and churn 219px -> 315px per post, with the same
+ * two still sliced. Whatever is slicing them is not tail width, and 0.25 is the
+ * better setting on both axes.
+ */
+const NEW_TAIL = 0.25
+
+/**
+ * Positions with x frozen against `domain` and y/size ranked live over `corpus`.
+ *
+ * `nodes` is what gets positioned (which includes ghost context nodes absent
+ * from the corpus — they were left unpositioned by the earlier attempt and fell
+ * back to a shared 0.5, silently promoting a dismissed ancestor's thread up the
+ * engagement axis).
+ */
+export function positionsFrozenTime(
+  nodes: GraphNode[],
+  corpus: GraphNode[],
+  domain: TimeDomain,
+): Map<string, NodePosition> {
+  const scores = corpus.map((n) => n.score).filter(Number.isFinite).sort((a, b) => a - b)
+  const replies = corpus.map(replySignal).filter(Number.isFinite).sort((a, b) => a - b)
+  const rankIn = (sorted: number[], v: number) => {
+    const n = sorted.length
+    if (n < 2 || !Number.isFinite(v)) return 0.5
+    let lo = 0
+    let hi = n
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (sorted[mid] <= v) lo = mid + 1
+      else hi = mid
+    }
+    return Math.max(0, Math.min(1, (lo - 1) / (n - 1)))
+  }
+  // Derived from the domain's own span rather than a fixed number of hours: a
+  // constant either swallows a quiet feed's whole history or saturates in
+  // minutes on a busy one. Posts beyond it share the last column, which is the
+  // clamping this tail exists to postpone, not abolish.
+  const tailSpan = Math.max(1, (domain.max - domain.min) * 0.15)
+
+  const out = new Map<string, NodePosition>()
+  for (const n of nodes) {
+    const t = n.timestamp
+    const x = !Number.isFinite(t)
+      ? 0.5
+      : t <= domain.max
+        ? timeRank(domain, t) * (1 - NEW_TAIL)
+        : 1 - NEW_TAIL + NEW_TAIL * Math.min(1, (t - domain.max) / tailSpan)
+    out.set(n.uri, { x, y: 1 - rankIn(scores, n.score), sizeRank: rankIn(replies, replySignal(n)) })
+  }
+  return out
+}
+
 export function layoutPositions(nodes: GraphNode[]): Map<string, NodePosition> {
   const timeRanks = fractionalRanks(nodes.map((n) => n.timestamp))
   const scoreRanks = fractionalRanks(nodes.map((n) => n.score))

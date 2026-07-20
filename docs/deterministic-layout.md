@@ -122,10 +122,17 @@ behaviour; not worth chasing.
 
 ## Related state
 
-- `feat/stable-x-axis` — froze the time axis to reduce target churn
-  (219px/post vs 533). The solver removes *settle* churn but targets still
-  move on re-rank, so the idea is not moot — re-measure on top of the solver
-  before deciding to revive or delete the branch. Its 2 mystery sliced
-  conversations are likely the margin-band bug, fixed here.
+- **Frozen time axis — revived on the solver (was `feat/stable-x-axis`).**
+  Freezes x so backfill stops re-ranking every node's column; y/engagement stays
+  live (freezing `score`, a decaying rate, sank the whole population — see the
+  commit). Re-measured signed-in on the solver (pill mode): settle churn
+  **277px/post vs 863** on relative-x main (a 68% cut), and the density penalty
+  that blocked the original branch is **gone** — 14 whole / 12 hidden / **1
+  sliced** vs main's 14/11/**2**. So the "2 mystery sliced conversations" WERE
+  the margin-band clamp bug the solver fixed, as suspected. Scoped to
+  reservoir/pill mode (`bleed.x`); avatar mode still ranks relative, pending its
+  own measurement (a fast-follow). The domain snapshot is a plain variable
+  captured in the derived, not `$state`: both an effect that replaces it and a
+  version counter re-introduced `effect_update_depth_exceeded`.
 - PR #38 — merged. Pill mode, the reservoir, pan/zoom, tree cohesion, the
   render-layer arrival animation (whose success predicted the tween approach).

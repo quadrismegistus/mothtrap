@@ -10,6 +10,9 @@ import {
   selectVisible,
   threadDescendants,
   treeTargets,
+  buildTimeDomain,
+  positionsFrozenTime,
+  timeDomainIsStale,
   withTopicPills,
   type GraphNode,
   type TreeLayoutBox,
@@ -907,5 +910,101 @@ describe('withTopicPills', () => {
     expect(out).toHaveLength(2)
     expect(out.find((n) => n.uri === 'a')!.parent).toBeUndefined()
     expect(out.find((n) => n.uri === 'b')!.parent).toBe('a')
+  })
+})
+
+describe('frozen time axis', () => {
+  const node = (uri: string, timestamp: number, score = 1): GraphNode =>
+    ({ uri, timestamp, score, collapsedCount: 0, item: { post: { replyCount: 0 } } }) as unknown as GraphNode
+
+  it('survives a malformed timestamp instead of unsorting the domain', () => {
+    // One NaN makes every sort comparison NaN, which leaves the array UNSORTED
+    // and breaks the binary search for every post. createdAt is attacker-set.
+    const d = buildTimeDomain([node('a', 100), node('bad', NaN), node('c', 300), node('b', 200)])
+    expect(d.t).toEqual([100, 200, 300])
+    const pos = positionsFrozenTime([node('bad', NaN)], [node('bad', NaN)], d)
+    expect(Number.isFinite(pos.get('bad')!.x)).toBe(true)
+  })
+
+  it('maps the oldest post to 0 and the newest to the head of the tail', () => {
+    // The earlier version returned count/(n-1), shifting every rank up by one,
+    // so the top TWO values both saturated at 1 and nothing reached 0.
+    const corpus = [node('a', 10), node('b', 20), node('c', 30), node('d', 40), node('e', 50)]
+    const d = buildTimeDomain(corpus)
+    const pos = positionsFrozenTime(corpus, corpus, d)
+    expect(pos.get('a')!.x).toBeCloseTo(0, 5)
+    expect(pos.get('e')!.x).toBeGreaterThan(pos.get('d')!.x)
+    expect(pos.get('e')!.x).toBeLessThanOrEqual(1)
+  })
+
+  it('does not move existing posts when a newer one arrives', () => {
+    // The whole point: backfill must not re-rank what is already on screen.
+    const corpus = [node('a', 10), node('b', 20), node('c', 30)]
+    const d = buildTimeDomain(corpus)
+    const before = positionsFrozenTime(corpus, corpus, d)
+    const after = positionsFrozenTime([...corpus, node('new', 99)], [...corpus, node('new', 99)], d)
+    for (const uri of ['a', 'b', 'c']) {
+      expect(after.get(uri)!.x).toBeCloseTo(before.get(uri)!.x, 10)
+    }
+  })
+
+  it('rebuilds on a corpus that has moved on, in either direction', () => {
+    // Keyed on how many posts fall outside the domain, not on node count: the
+    // count test could never fire on a shrinking corpus, and counted DISPLAY
+    // nodes, so expanding one thread triggered a full re-layout.
+    const d = buildTimeDomain([node('a', 10), node('b', 20), node('c', 30)])
+    expect(timeDomainIsStale(d, [node('a', 10), node('b', 20)])).toBe(false)
+    expect(timeDomainIsStale(d, [node('x', 900), node('y', 950), node('z', 980)])).toBe(true)
+    expect(timeDomainIsStale(null, [node('a', 10)])).toBe(true)
+  })
+
+  it('positions ghost nodes absent from the corpus', () => {
+    // They were left out of the map entirely and fell back to a shared 0.5,
+    // which silently promoted a dismissed ancestor's thread up the y axis.
+    const corpus = [node('a', 10, 1), node('b', 20, 5)]
+    const d = buildTimeDomain(corpus)
+    const pos = positionsFrozenTime([...corpus, node('ghost', 15, 3)], corpus, d)
+    expect(pos.has('ghost')).toBe(true)
+    // And it lands BETWEEN its neighbours rather than snapping onto one: the
+    // domain is fixed while posts keep arriving between its values.
+    expect(pos.get('ghost')!.x).toBeGreaterThan(pos.get('a')!.x)
+    expect(pos.get('ghost')!.x).toBeLessThan(pos.get('b')!.x)
+  })
+
+  it('leaves the y axis live, so a decaying score still ranks correctly', () => {
+    // Freezing y is what sank the whole population over a few hours: score is a
+    // rate that decays with age, unlike a timestamp.
+    const d = buildTimeDomain([node('a', 10), node('b', 20)])
+    const quiet = positionsFrozenTime([node('a', 10, 1)], [node('a', 10, 1), node('b', 20, 9)], d)
+    const loud = positionsFrozenTime([node('b', 20, 9)], [node('a', 10, 1), node('b', 20, 9)], d)
+    expect(loud.get('b')!.y).toBeLessThan(quiet.get('a')!.y) // louder sits higher
+  })
+
+  it('advances a post newer than the whole domain into the reserved tail and clamps at 1', () => {
+    // A post past the snapshot doesn't share the newest column — it moves through
+    // the NEW_TAIL band toward x=1, and clamps there rather than running off.
+    const corpus = [node('a', 10), node('b', 20), node('c', 30)]
+    const d = buildTimeDomain(corpus)
+    const head = positionsFrozenTime([node('c', 30)], corpus, d).get('c')!.x // domain.max
+    const near = positionsFrozenTime([node('near', 32)], corpus, d).get('near')!.x
+    const far = positionsFrozenTime([node('far', 1e9)], corpus, d).get('far')!.x
+    expect(head).toBeCloseTo(0.75, 5) // 1 - NEW_TAIL, the tail head
+    expect(near).toBeGreaterThan(head) // into the tail
+    expect(far).toBeCloseTo(1, 5) // clamped at the axis edge
+  })
+
+  it('keeps x within [0,1] for posts older, inside, newer, and malformed', () => {
+    const corpus = [node('a', 100), node('b', 200), node('c', 300)]
+    const d = buildTimeDomain(corpus)
+    const mixed = [node('older', 1), node('inside', 250), node('newer', 1e12), node('nan', NaN)]
+    const pos = positionsFrozenTime(mixed, corpus, d)
+    for (const n of mixed) {
+      const x = pos.get(n.uri)!.x
+      expect(Number.isFinite(x)).toBe(true)
+      expect(x).toBeGreaterThanOrEqual(0)
+      expect(x).toBeLessThanOrEqual(1)
+    }
+    expect(pos.get('older')!.x).toBe(0) // older than the domain clamps to the left edge
+    expect(pos.get('nan')!.x).toBe(0.5) // malformed → centre, never NaN
   })
 })
