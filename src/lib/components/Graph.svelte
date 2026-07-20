@@ -1712,13 +1712,14 @@
       (t instanceof HTMLElement && t.isContentEditable)
     )
       return
-    // A blocking modal (Settings, Compose, Report, Help, digest consent, the
-    // reactions panel) renders a full-screen `.backdrop`. While one is open the
-    // graph sits behind it — don't let a keyboard-set `hovered` (which persists,
-    // unlike a pointer hover) get navigated/rated/dismissed underneath it, and
-    // leave the modal's own arrow/Escape keys alone. Side panels (digest, the
+    // A blocking modal renders a full-screen backdrop over the graph. While one
+    // is open, don't let a keyboard-set `hovered` (which persists, unlike a
+    // pointer hover) get navigated/rated/dismissed underneath it, and leave the
+    // modal's own arrow/Escape keys alone. Six modals use `.backdrop`; the
+    // coverage overlay uses `.cov-backdrop` — a NEW full-screen overlay must add
+    // its backdrop class here or it reopens this leak. Side panels (digest, the
     // config popover) have no backdrop, so shortcuts still work alongside them.
-    if (document.querySelector('.backdrop')) return
+    if (document.querySelector('.backdrop, .cov-backdrop')) return
     const k = e.key.toLowerCase()
     if (e.key === 'Escape') {
       hovered = null
