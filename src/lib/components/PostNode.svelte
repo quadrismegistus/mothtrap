@@ -297,9 +297,11 @@
   .wrap.active {
     z-index: 50;
   }
+  /* The post whose card is showing: a bright gold ring so it's unmistakable
+     which node you're reading (like — but brighter than — the pinned ring). */
   .wrap.active .node {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.35);
+    border-color: #ffcf4a;
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 5px #ffcf4a;
   }
   .wrap.pinned .node {
     border-color: #e0a838;
