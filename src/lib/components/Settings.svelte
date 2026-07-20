@@ -48,8 +48,11 @@
     wiping = true
     try {
       await archive.wipe()
-      await read.reset()
-      reactions.reset()
+      // purge() (not reset()) so the wipe actually deletes the on-disk read/
+      // reaction keys — they live in a separate idb-keyval DB that archive.wipe
+      // doesn't touch, and the UI promises "everything stored is gone."
+      await read.purge()
+      await reactions.purge()
       digest.clear()
       stats = null
       wiped = true

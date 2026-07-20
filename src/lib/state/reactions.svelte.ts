@@ -1,4 +1,4 @@
-import { get, set } from 'idb-keyval'
+import { del, get, set } from 'idb-keyval'
 import { SvelteMap } from 'svelte/reactivity'
 
 export type ReactionKind = 'up' | 'down'
@@ -67,6 +67,15 @@ class Reactions {
   reset() {
     this.#did = undefined
     this.byUri.clear()
+  }
+
+  /** Delete this user's persisted reactions AND clear memory — for the local-
+   * data wipe, which promises "everything this device stored is gone." Unlike
+   * reset() (logout, memory-only), this actually removes the on-disk key. Runs
+   * before reset() nulls #did, so the key is still resolvable. */
+  async purge() {
+    if (this.#did) await del(this.#key(this.#did))
+    this.reset()
   }
 
   async #persist() {

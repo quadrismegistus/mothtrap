@@ -1683,7 +1683,17 @@
   $effect(() => () => clearTimeout(clearTimer))
 
   function onKey(e: KeyboardEvent) {
-    if (e.target instanceof HTMLInputElement) return
+    // Don't hijack typing. A modal compose/report textarea lives outside this
+    // component and its keystrokes bubble to this window handler, so a bare
+    // guard on <input> alone let letters fire graph shortcuts (r/n/l — and now
+    // the destructive y/n) mid-sentence. Cover textareas and contenteditable.
+    const t = e.target
+    if (
+      t instanceof HTMLInputElement ||
+      t instanceof HTMLTextAreaElement ||
+      (t instanceof HTMLElement && t.isContentEditable)
+    )
+      return
     const k = e.key.toLowerCase()
     if (e.key === 'Escape') {
       hovered = null

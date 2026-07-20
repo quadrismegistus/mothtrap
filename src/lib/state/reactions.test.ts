@@ -70,4 +70,17 @@ describe('reactions store (#66 private thumbs)', () => {
     await reopened.load('did:plc:me')
     expect(reopened.reactionOf('at://p/1')).toBe('up')
   })
+
+  it('purge deletes the on-disk key too — a wiped device stays wiped after reload', async () => {
+    const r = new Reactions()
+    await r.load('did:plc:me')
+    await r.react('at://p/1', 'did:plc:alice', 'up')
+    await r.purge()
+    expect(r.reactionOf('at://p/1')).toBeUndefined()
+
+    // Unlike reset(), a fresh load must NOT see the reaction resurrected.
+    const reopened = new Reactions()
+    await reopened.load('did:plc:me')
+    expect(reopened.reactionOf('at://p/1')).toBeUndefined()
+  })
 })
