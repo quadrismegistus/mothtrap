@@ -251,7 +251,20 @@
   // feed the classifier (a bare reply is unclassifiable without it).
   const contextByUri = $derived(new Map(allItems.map((i) => [i.post.uri, i])))
   const primaryUris = $derived(new Set(primarySources.map((i) => i.post.uri)))
-  const visible = $derived(allItems.filter((i) => !read.isDismissed(i.post.uri)))
+  const visible = $derived(
+    allItems.filter(
+      (i) =>
+        !read.isDismissed(i.post.uri) &&
+        // "Hide muted replies" drops silenced ANCESTORS from the graph entirely,
+        // not just the feed. corpus.contextItems is unmoderated, so a muted
+        // account pulled in as reply context reaches allItems; without this it
+        // becomes a full-planned member and is SEATED (as a covered hub a
+        // followed reply hangs off) before the chain-climb prune can act. The
+        // climb prune (below) still handles the ghost/context-only path, where
+        // the parent is resolved from contextByUri rather than a seated node.
+        !(settings.hideMutedReplies && moderation.isSilenced(i.post.author)),
+    ),
+  )
   // THE PLAN (PLAN §8): conversations are the unit of every display decision.
   // One pass with global knowledge ranks conversations (not posts), applies
   // author diversity (a reply-flooding account can't fill the window with
