@@ -217,7 +217,7 @@ export interface TreeTarget {
   tx: number
   ty: number
   r: number
-  /** Half-extents, set only in pill mode (see rectCollide in forceLayout). */
+  /** Half-extents, set only in pill mode (see the rect collision in layout). */
   hw?: number
   hh?: number
   /** The tree this node belongs to (its root's uri). Lets the layout keep a

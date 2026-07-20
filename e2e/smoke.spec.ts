@@ -330,13 +330,13 @@ test('config popover closes on a click outside it', async ({ page }) => {
   await expect(page.locator('.config')).toHaveCount(0)
 })
 
-test('high cohesion hides the semantic axes', async ({ page }) => {
+test('the semantic axes are always labelled', async ({ page }) => {
+  // The cohesion slider is gone (the deterministic solver has no forces to
+  // blend), so position always means recency x engagement — and the labels
+  // saying so should always be on screen.
   await graphReady(page)
-  await page.locator('.gear').click()
-  // Drag Cohesion to the top of its range — the axes stop meaning anything.
-  await page.locator('.config .row', { hasText: 'Cohesion' }).locator('input').fill('1')
-  await expect(page.locator('.x-axis')).toHaveCount(0)
-  expect(await page.locator('button.node').count()).toBeGreaterThan(0)
+  await expect(page.locator('.x-axis')).toBeVisible()
+  await expect(page.locator('.y-axis')).toBeVisible()
 })
 
 test('a card near the bottom is not clipped', async ({ page }) => {

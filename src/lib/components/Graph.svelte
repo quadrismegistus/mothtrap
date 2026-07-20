@@ -16,7 +16,7 @@
     type TopicPill,
     type TreeNode,
   } from '../state/graph'
-  import { ForceLayout, type Target } from '../state/forceLayout'
+  import { Layout, type Target } from '../state/layout'
   import { buildConversations, planView } from '../state/conversations'
   import { read } from '../state/read.svelte'
   import { moderation } from '../state/moderation.svelte'
@@ -39,6 +39,7 @@
   import { deploy } from '../state/deploy.svelte'
   import { isDemo } from '../api/demo'
   import { convoColor } from '../api/llm'
+  import { untrack } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import PostNode from './PostNode.svelte'
   import PostCard from './PostCard.svelte'
@@ -92,7 +93,7 @@
   // footprint, so far fewer posts fit — that is the trade, not a side effect.
   const PILL_H = 56
   /** Breathing room between pills. Used by the tidy-tree grid, the collision
-   * force and the node budget alike — see ForceLayout.setCollision. */
+   * pass and the node budget alike — see Layout.setCollision. */
   const PILL_GAP = { x: 34, y: 32 }
   // Narrow canvases get a narrower pill, so a phone still fits one comfortably.
   // ?pills=1 turns it on without a settings control, so the idea can be looked
@@ -613,11 +614,6 @@
       })
       .filter((t): t is Target => t !== null),
   )
-  const topicLinks = $derived(
-    topicMembership.flatMap((m) =>
-      m.uris.filter((u) => targetByUri.has(u)).map((u) => ({ source: m.sid, target: u })),
-    ),
-  )
 
   // Render: topic nodes + edges positioned from the LIVE sim positions. A
   // conversation with no visible members simply isn't drawn.
@@ -752,9 +748,11 @@
     setHovered(uri)
   }
 
-  // Topic nodes are draggable sim nodes (dragging pulls their member posts via
-  // the links). A plain click pins the topic where it is (like a post); it does
-  // NOT open every member's card. Threshold + window listeners mirror PostNode.
+  // Topic nodes are draggable layout nodes. A revealed pill is pinned, so
+  // dragging it moves its whole conversation (the solver anchors a group to
+  // its pinned member); an unrevealed pill moves alone. A plain click pins
+  // the topic where it is (like a post); it does NOT open every member's
+  // card. Threshold + window listeners mirror PostNode.
   function togglePinUri(id: string) {
     if (pinned.has(id)) pinned.delete(id)
     else pinned.add(id)
@@ -995,26 +993,81 @@
     URL.revokeObjectURL(url)
   }
 
-  // ── force layout lifecycle ────────────────────────────────────────────────
-  let layout: ForceLayout | undefined
+  // ── layout lifecycle ──────────────────────────────────────────────────────
+  // The solver returns final positions synchronously; motion is a render
+  // concern. paint() glides the previously painted positions to each new
+  // answer over a few hundred ms — the same division of labour as the arrival
+  // animation, which is the one piece of motion work here that worked on the
+  // first attempt. Exceptions that paint immediately: the very first solve
+  // (there is nothing on screen to glide FROM — easing the whole graph in
+  // from nowhere was the load flicker), every solve during a drag (the
+  // neighbours must flow in real time, not 400ms behind the pointer), and
+  // reduced-motion users.
+  let layout: Layout | undefined
+  let draggingUri: string | null = null
+  let tweenRaf = 0
+  const TWEEN_MS = 400
+  // Read per paint, not captured at mount: the CSS side (PostNode's entrance)
+  // honours a mid-session reduce-motion change via media query, and the two
+  // motion systems must not disagree. One matchMedia call per solve is free.
+  const reducedMotion = () =>
+    typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
+
+  function paint(solved: Map<string, { x: number; y: number }>) {
+    cancelAnimationFrame(tweenRaf)
+    // Nothing moved far enough to see: skip the tween, not because it would
+    // look wrong but because 400ms of rAF re-renders for sub-pixel motion is
+    // pure heat. This is the common case — most updates change data, not
+    // geometry.
+    let still = positions.size > 0
+    if (still) {
+      for (const [id, to] of solved) {
+        const f = positions.get(id)
+        if (!f || Math.abs(to.x - f.x) > 0.5 || Math.abs(to.y - f.y) > 0.5) {
+          still = false
+          break
+        }
+      }
+    }
+    if (still || draggingUri || positions.size === 0 || reducedMotion()) {
+      positions = solved
+      return
+    }
+    const from = new Map(positions)
+    const t0 = performance.now()
+    const step = (now: number) => {
+      const t = Math.min(1, (now - t0) / TWEEN_MS)
+      const e = 1 - (1 - t) ** 3 // ease-out cubic: fast start, gentle landing
+      const next = new Map<string, { x: number; y: number }>()
+      for (const [id, to] of solved) {
+        const f = from.get(id)
+        // A node with no previous position is an arrival: paint it at its
+        // final spot at once — PostNode's own entrance animates it in.
+        next.set(id, f ? { x: f.x + (to.x - f.x) * e, y: f.y + (to.y - f.y) * e } : to)
+      }
+      positions = next
+      if (t < 1) tweenRaf = requestAnimationFrame(step)
+    }
+    tweenRaf = requestAnimationFrame(step)
+  }
+
   $effect(() => {
-    const l = new ForceLayout(() => {
-      positions = l.positions()
-    })
+    // untrack: paint() reads `positions` to decide whether to tween, and the
+    // solver calls it synchronously from inside the update effect below.
+    // Untracked, or that read-write on the same $state is a dependency cycle
+    // (effect_update_depth_exceeded — found the hard way, twice).
+    const l = new Layout(() => untrack(() => paint(l.positions())))
     layout = l
-    return () => l.stop()
+    return () => cancelAnimationFrame(tweenRaf)
   })
 
-  // Reheat whenever targets or links change (new data, resize, dismissal, turnover),
-  // or when the pinned set changes (pinned nodes get fixed positions).
+  // Re-solve whenever targets change (new data, resize, dismissal, turnover),
+  // or when the pinned set changes (pinned nodes hold their positions).
   $effect(() => {
     const t = [...targets, ...topicTargets]
-    const links = [...visibleEdges.map((e) => ({ source: e.from, target: e.to })), ...topicLinks]
-    // Clamp nodes inside the canvas so they can't drift up under the top bar (the
-    // graph starts below it, but the sim could otherwise push a node to the edge).
     layout?.setCollision(pill ? pill.gap : null) // rectangles vs circles
     layout?.setBounds(w, h, 18, Math.max(24, bottomChrome), bleed.x, bleed.y)
-    layout?.update(t, links, new Set(pinned), settings.cohesion)
+    layout?.update(t, new Set(pinned))
   })
 
   // Measure the bottom UI chrome (gear bottom-left, Digest/Load-more
@@ -1335,10 +1388,17 @@
 
   function onNodeDrag(uri: string, clientX: number, clientY: number) {
     const p = toGraph(clientX, clientY)
+    // Flagged BEFORE the solve so paint() skips the tween: neighbours must
+    // flow around the pointer live, not 400ms behind it.
+    draggingUri = uri
     layout?.dragTo(uri, p.x, p.y)
   }
   function onNodeDragEnd(uri: string) {
-    layout?.dragEnd(uri, pinned.has(uri))
+    draggingUri = null
+    // No re-solve on release: the node rests at the drop point so a follow-up
+    // click can pin it THERE; the next data update returns an unpinned node
+    // to its semantic spot (see Layout.dragEnd).
+    layout?.dragEnd(uri)
   }
 
   // Expansion is keyed by the clicked post's own uri (stable as the group grows);
@@ -1544,10 +1604,8 @@
     if (!t.closest('.wrap, .card, .config-wrap, .hud, .panel, .digest-btn, .topic-node')) clearAll()
   }}
 >
-  {#if settings.cohesion < 0.5}
-    <div class="axis y-axis">← quieter · louder →</div>
-    <div class="axis x-axis">← last active: older · newer →</div>
-  {/if}
+  <div class="axis y-axis">← quieter · louder →</div>
+  <div class="axis x-axis">← last active: older · newer →</div>
   <!-- Pills are a fixed size, so the legend would be describing an encoding
        that is not on screen. -->
   {#if !pill}
@@ -1765,16 +1823,6 @@
           <span class="val"></span>
         </div>
         <p class="hint">Show each reply's full parent chain to the thread root (won't collapse those threads).</p>
-
-        <div class="row">
-          <span class="label">Cohesion</span>
-          <input type="range" min="0" max="1" step="0.05" bind:value={settings.cohesion} />
-          <span class="val">{Math.round(settings.cohesion * 100)}%</span>
-        </div>
-        <p class="hint">
-          Left: posts hold to the time/engagement axes. Right: connections pull connected posts
-          together into clumps.
-        </p>
 
         <div class="row">
           <span class="label">Curved edges</span>

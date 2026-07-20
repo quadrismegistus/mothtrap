@@ -4,6 +4,8 @@ import { migrateV1, DEFAULTS } from './settings.svelte'
 describe('settings migrateV1', () => {
   it('drops v1 fields equal to their OLD defaults (auto-persisted, not chosen)', () => {
     // A typical v1 blob: every field written wholesale with the old defaults.
+    // `cohesion` no longer exists as a setting (hence the cast) but real v1
+    // blobs contain it, and the stale key must still be stripped.
     const p = migrateV1({
       nodeLimit: 20,
       selectMode: 'mix',
@@ -17,7 +19,7 @@ describe('settings migrateV1', () => {
       showReposts: true,
       followsOnly: false,
       debugMode: false,
-    })
+    } as Parameters<typeof migrateV1>[0])
     expect(p).toEqual({}) // nothing survives → today's defaults apply
   })
 

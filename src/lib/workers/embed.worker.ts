@@ -4,9 +4,9 @@ import { env, pipeline, type FeatureExtractionPipeline } from '@huggingface/tran
 /**
  * On-device text embedding, off the main thread.
  *
- * A worker is not optional here: MiniLM inference on WASM blocks for hundreds of
- * milliseconds, and the graph is running a d3-force simulation at 60fps. On the
- * main thread every embed would visibly hitch the layout.
+ * A worker is not optional here: MiniLM inference on WASM blocks for hundreds
+ * of milliseconds, and the graph animates position changes with rAF tweens. On
+ * the main thread every embed would visibly hitch the layout.
  *
  * Everything is self-hosted. `allowRemoteModels = false` is the load-bearing
  * line — without it transformers.js silently falls back to the HuggingFace CDN,
