@@ -80,6 +80,10 @@
     run,
   }: Props = $props()
 
+  // One private up/down vote for the whole card (the shown post). Reactive so the
+  // active arrow highlights on click and on a resurfaced ghost.
+  const myVote = $derived(reactions.reactionOf(item.post.uri))
+
   // Keep the card fully on screen: shift its top up if its measured height would
   // run off the bottom of the container.
   let cardH = $state(0)
@@ -561,17 +565,41 @@
     </div>
   {/if}
 
-  {#if canMapReplies}
-    <button class="map-replies" class:on={repliesMapped} onclick={() => onmapreplies(item)}>
-      {repliesMapped ? 'Hide replies' : `Map replies${item.post.replyCount ? ` (${item.post.replyCount})` : ''}`}
-    </button>
-  {/if}
+  <!-- Foot row: Map replies (takes the width) + one private up/down vote for the
+       whole card (never sent to Bluesky; feeds the unfollow tally). A vote also
+       dismisses the post. -->
+  <div class="foot">
+    {#if canMapReplies}
+      <button class="map-replies" class:on={repliesMapped} onclick={() => onmapreplies(item)}>
+        {repliesMapped ? 'Hide replies' : `Map replies${item.post.replyCount ? ` (${item.post.replyCount})` : ''}`}
+      </button>
+    {/if}
+    <div class="votes">
+      <button
+        class="vote up"
+        class:on={myVote === 'up'}
+        title="Upvote — private, on-device only (feeds the unfollow tally); also dismisses"
+        aria-label="Upvote"
+        onclick={() => onrate(item, 'up')}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5l7 11H5z" fill="currentColor" /></svg>
+      </button>
+      <button
+        class="vote down"
+        class:on={myVote === 'down'}
+        title="Downvote — private, on-device only (feeds the unfollow tally); also dismisses"
+        aria-label="Downvote"
+        onclick={() => onrate(item, 'down')}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19l7-11H5z" fill="currentColor" /></svg>
+      </button>
+    </div>
+  </div>
 </div>
 
 {#snippet actionRow(p: FeedItem, compact: boolean)}
   {@const pLiked = interactions.liked(p)}
   {@const pReposted = interactions.reposted(p)}
-  {@const pReaction = reactions.reactionOf(p.post.uri)}
   <div class="actions" class:compact>
     <button class="act" title="Reply" onclick={() => onreply(p)}>
       <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d={REPLY} fill="currentColor" /></svg>
@@ -665,26 +693,6 @@
     </div>
   </div>
 
-  <!-- Private thumbs (#66) on their own row: local-only (never sent to Bluesky),
-       kept out of the public action row above so neither is clipped and both are
-       clearly visible. Feeds the "who to unfollow" tally; a tap just toggles. -->
-  <div class="private">
-    <span class="pv-label">Private</span>
-    <button
-      class="pv up"
-      class:on={pReaction === 'up'}
-      title="Privately like — on-device only, for the unfollow tally"
-      aria-label="Privately like"
-      onclick={() => onrate(p, 'up')}>👍</button
-    >
-    <button
-      class="pv down"
-      class:on={pReaction === 'down'}
-      title="Privately dislike — on-device only, for the unfollow tally"
-      aria-label="Privately dislike"
-      onclick={() => onrate(p, 'down')}>👎</button
-    >
-  </div>
   {#if modError && !compact}<p class="mod-error">{modError}</p>{/if}
 {/snippet}
 
@@ -1034,12 +1042,54 @@
     width: 13px;
     height: 13px;
   }
-  .map-replies {
-    width: 100%;
+  .foot {
+    display: flex;
+    align-items: stretch;
+    gap: 0.5rem;
     margin-top: 0.5rem;
+  }
+  .map-replies {
+    flex: 1; /* takes the row; the votes sit compact on the right */
     font-size: 0.8rem;
     padding: 0.4rem;
     color: var(--text-dim);
+  }
+  /* Private up/down vote — arrows (SVG, so they take the active color), never
+     sent to Bluesky. A vote also dismisses the post. */
+  .votes {
+    display: flex;
+    gap: 0.35rem;
+    margin-left: auto; /* right-aligned even when there is no Map-replies button */
+  }
+  .vote {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-dim);
+    cursor: pointer;
+  }
+  .vote svg {
+    width: 18px;
+    height: 18px;
+    display: block;
+  }
+  .vote:hover {
+    background: var(--bg);
+    color: var(--text);
+  }
+  .vote.up.on {
+    border-color: #3fb950;
+    color: #3fb950;
+    background: rgba(63, 185, 80, 0.14);
+  }
+  .vote.down.on {
+    border-color: var(--danger);
+    color: var(--danger);
+    background: rgba(229, 72, 77, 0.14);
   }
   .map-replies:hover {
     border-color: var(--accent);
@@ -1111,44 +1161,6 @@
   }
   .act.like.on {
     color: var(--danger);
-  }
-  /* Private-reaction row — its own line so the public actions never crowd or
-     clip it, and both thumbs are plainly visible. */
-  .private {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    margin-top: 0.5rem;
-    padding-top: 0.5rem;
-    border-top: 1px solid var(--border);
-  }
-  .pv-label {
-    font-size: 0.62rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-dim);
-    margin-right: 0.15rem;
-  }
-  .pv {
-    font-size: 1rem;
-    line-height: 1;
-    padding: 0.2rem 0.55rem;
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    cursor: pointer;
-  }
-  .pv:hover {
-    background: var(--bg);
-  }
-  /* Emoji ignore `color`, so the active state reads through border + fill. */
-  .pv.up.on {
-    border-color: #3fb950;
-    background: rgba(63, 185, 80, 0.16);
-  }
-  .pv.down.on {
-    border-color: var(--danger);
-    background: rgba(229, 72, 77, 0.16);
   }
   .repost-wrap:has(.on) .act,
   .act.on {
