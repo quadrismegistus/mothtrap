@@ -9,20 +9,32 @@
   }
   let { onclose }: Props = $props()
 
-  type Tab = 'all' | 'following' | 'notFollowing'
-  let tab = $state<Tab>('all')
+  // Relationship buckets over the 2×2 of (I follow them) × (they follow me), as
+  // MECE single-select categories — cleaner than two orthogonal filters once the
+  // meaningful states are named. "Following"/"Follower" are the one-way cases,
+  // "Mutual" is both; strangers (neither, e.g. a reacted reply author) live only
+  // under "All".
+  type Rel = 'all' | 'following' | 'follower' | 'mutual'
+  let rel = $state<Rel>('all')
 
   // Pure reaction ranking (depends on the reactions map ONLY) — this is what the
   // resolver effect keys off, so it can't get entangled with the profile cache.
   const ranked = $derived(reactions.byAuthor)
 
-  // Ranked authors joined with their resolved profile + live follow state, for
-  // rendering. Recomputes when reactions/profiles/follows change.
+  // Ranked authors joined with their resolved profile + both follow directions,
+  // for rendering. Recomputes when reactions/profiles/follows change.
   const rows = $derived.by(() =>
     ranked.map((t) => {
       const p = profiles.get(t.did)
       const author = { did: t.did, viewer: p?.viewer }
-      return { t, author, p, following: follows.following(author), resolved: !!p }
+      return {
+        t,
+        author,
+        p,
+        following: follows.following(author),
+        followsYou: follows.followsYou(author),
+        resolved: !!p,
+      }
     }),
   )
 
@@ -45,14 +57,27 @@
     })
   })
 
-  // Follow state resolves a beat after open, so an author is only placed in
-  // Following / Not-following once known — until then it sits in All alone,
-  // rather than being mis-bucketed (the same reason the row shows "…" not
-  // "Not following").
-  const followingRows = $derived(rows.filter((r) => r.following))
-  const notFollowingRows = $derived(rows.filter((r) => !r.following && r.resolved))
+  // An author only lands in a relationship bucket once its follow state
+  // resolves; until then following/followsYou read false, so they classify as
+  // "neither" and appear only under All — never mis-bucketed (same reason the
+  // row shows "…" rather than "Not following").
+  const counts = $derived.by(() => {
+    const c = { following: 0, follower: 0, mutual: 0 }
+    for (const r of rows) {
+      if (r.following && r.followsYou) c.mutual++
+      else if (r.following) c.following++
+      else if (r.followsYou) c.follower++
+    }
+    return c
+  })
   const shown = $derived(
-    tab === 'following' ? followingRows : tab === 'notFollowing' ? notFollowingRows : rows,
+    rel === 'mutual'
+      ? rows.filter((r) => r.following && r.followsYou)
+      : rel === 'following'
+        ? rows.filter((r) => r.following && !r.followsYou)
+        : rel === 'follower'
+          ? rows.filter((r) => !r.following && r.followsYou)
+          : rows,
   )
 
   function profileUrl(did: string) {
@@ -90,36 +115,41 @@
         <kbd>n</kbd> to dislike — the tally shows up here.
       </p>
     {:else}
-      <div class="tabs" role="tablist" aria-label="Filter by follow state">
-        <button role="tab" aria-selected={tab === 'all'} class:on={tab === 'all'} onclick={() => (tab = 'all')}>
+      <div class="tabs" role="tablist" aria-label="Filter by relationship">
+        <button role="tab" aria-selected={rel === 'all'} class:on={rel === 'all'} onclick={() => (rel = 'all')}>
           All <span class="count">{rows.length}</span>
         </button>
         <button
           role="tab"
-          aria-selected={tab === 'following'}
-          class:on={tab === 'following'}
-          onclick={() => (tab = 'following')}
+          aria-selected={rel === 'following'}
+          class:on={rel === 'following'}
+          title="You follow them; they don't follow you back"
+          onclick={() => (rel = 'following')}
         >
-          Following <span class="count">{followingRows.length}</span>
+          Following <span class="count">{counts.following}</span>
         </button>
         <button
           role="tab"
-          aria-selected={tab === 'notFollowing'}
-          class:on={tab === 'notFollowing'}
-          onclick={() => (tab = 'notFollowing')}
+          aria-selected={rel === 'follower'}
+          class:on={rel === 'follower'}
+          title="They follow you; you don't follow them back"
+          onclick={() => (rel = 'follower')}
         >
-          Not following <span class="count">{notFollowingRows.length}</span>
+          Follower <span class="count">{counts.follower}</span>
+        </button>
+        <button
+          role="tab"
+          aria-selected={rel === 'mutual'}
+          class:on={rel === 'mutual'}
+          title="You follow each other"
+          onclick={() => (rel = 'mutual')}
+        >
+          Mutual <span class="count">{counts.mutual}</span>
         </button>
       </div>
 
       {#if shown.length === 0}
-        <p class="empty">
-          {#if tab === 'following'}
-            None of the people you've reacted to are ones you follow.
-          {:else}
-            You follow everyone you've reacted to.
-          {/if}
-        </p>
+        <p class="empty">No one in this group yet — react to more posts, or try another filter.</p>
       {:else}
         <ul class="rows">
           {#each shown as r (r.t.did)}
@@ -216,19 +246,20 @@
   }
   .tabs {
     display: flex;
-    gap: 0.3rem;
+    gap: 0.25rem;
     margin: 0 0 0.7rem;
   }
   .tabs button {
     flex: 1;
-    font-size: 0.78rem;
-    padding: 0.35rem 0.4rem;
+    min-width: 0;
+    font-size: 0.72rem;
+    padding: 0.32rem 0.3rem;
     background: var(--bg);
     color: var(--text-dim);
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 0.35rem;
+    gap: 0.3rem;
     white-space: nowrap;
   }
   .tabs button.on {
