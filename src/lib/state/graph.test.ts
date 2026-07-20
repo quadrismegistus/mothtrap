@@ -399,6 +399,47 @@ describe('self-reply runs', () => {
     const g = buildGraph(items, new Set([root]))
     expect(g.nodes.length).toBe(3) // branch point: no run swallows the siblings
   })
+
+  it('keeps the monologue whole when a MIDDLE post gets an external reply (#55)', () => {
+    // op posts a 3-part thread; a stranger replies to the 2nd post. The stranger's
+    // reply must not fracture the thread — the whole monologue stays ONE run node,
+    // and the external reply hangs off it as its own node/edge.
+    const root = 'at://x/root'
+    const items = [
+      mkPost({ uri: root, author: 'op.test', text: '1/3' }),
+      mkPost({ uri: 'at://x/r1', parent: root, root, author: 'op.test', text: '2/3' }),
+      mkPost({ uri: 'at://x/r2', parent: 'at://x/r1', root, author: 'op.test', text: '3/3' }),
+      mkPost({ uri: 'at://x/ext', parent: 'at://x/r1', root, author: 'stranger.test', text: 'butting in' }),
+    ]
+    const g = buildGraph(items, new Set([root]))
+    const run = g.nodes.find((n) => n.run)
+    expect(run?.run).toHaveLength(3) // all three op posts aboard one run
+    expect(run?.uri).toBe(root)
+    expect(g.memberNode.get('at://x/r2')).toBe(root) // the tail folded in, not stray
+    expect(g.nodes).toHaveLength(2) // the run + the stranger's reply, nothing more
+    // The external reply edges to the run HEAD (its parent r1 lives inside the run).
+    expect(g.edges.find((e) => e.from === 'at://x/ext')?.to).toBe(root)
+  })
+
+  it('op replying to an interloper does NOT rejoin the run', () => {
+    // The spine follows the IMMEDIATE parent's author, not the thread-op's. So
+    // when op answers the stranger (op → … stranger → op-again), that last post
+    // — same author as the monologue but a child of the stranger — stays its own
+    // node edging to the stranger, and must not be pulled back into the run.
+    const root = 'at://x/root'
+    const items = [
+      mkPost({ uri: root, author: 'op.test', text: '1/3' }),
+      mkPost({ uri: 'at://x/r1', parent: root, root, author: 'op.test', text: '2/3' }),
+      mkPost({ uri: 'at://x/r2', parent: 'at://x/r1', root, author: 'op.test', text: '3/3' }),
+      mkPost({ uri: 'at://x/ext', parent: 'at://x/r1', root, author: 'stranger.test' }),
+      mkPost({ uri: 'at://x/op2', parent: 'at://x/ext', root, author: 'op.test' }),
+    ]
+    const g = buildGraph(items, new Set([root]))
+    expect(g.nodes.find((n) => n.run)?.run).toHaveLength(3) // monologue still whole
+    expect(g.memberNode.get('at://x/op2')).toBe('at://x/op2') // op2 is its own node
+    expect(g.edges.find((e) => e.from === 'at://x/op2')?.to).toBe('at://x/ext') // → stranger, not the run
+    expect(g.nodes).toHaveLength(3) // run + stranger + op's answer
+  })
 })
 
 describe('plan mode (collapseUnexpanded): budget-demoted small threads', () => {
