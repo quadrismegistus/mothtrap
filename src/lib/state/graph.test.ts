@@ -979,4 +979,32 @@ describe('frozen time axis', () => {
     const loud = positionsFrozenTime([node('b', 20, 9)], [node('a', 10, 1), node('b', 20, 9)], d)
     expect(loud.get('b')!.y).toBeLessThan(quiet.get('a')!.y) // louder sits higher
   })
+
+  it('advances a post newer than the whole domain into the reserved tail and clamps at 1', () => {
+    // A post past the snapshot doesn't share the newest column — it moves through
+    // the NEW_TAIL band toward x=1, and clamps there rather than running off.
+    const corpus = [node('a', 10), node('b', 20), node('c', 30)]
+    const d = buildTimeDomain(corpus)
+    const head = positionsFrozenTime([node('c', 30)], corpus, d).get('c')!.x // domain.max
+    const near = positionsFrozenTime([node('near', 32)], corpus, d).get('near')!.x
+    const far = positionsFrozenTime([node('far', 1e9)], corpus, d).get('far')!.x
+    expect(head).toBeCloseTo(0.75, 5) // 1 - NEW_TAIL, the tail head
+    expect(near).toBeGreaterThan(head) // into the tail
+    expect(far).toBeCloseTo(1, 5) // clamped at the axis edge
+  })
+
+  it('keeps x within [0,1] for posts older, inside, newer, and malformed', () => {
+    const corpus = [node('a', 100), node('b', 200), node('c', 300)]
+    const d = buildTimeDomain(corpus)
+    const mixed = [node('older', 1), node('inside', 250), node('newer', 1e12), node('nan', NaN)]
+    const pos = positionsFrozenTime(mixed, corpus, d)
+    for (const n of mixed) {
+      const x = pos.get(n.uri)!.x
+      expect(Number.isFinite(x)).toBe(true)
+      expect(x).toBeGreaterThanOrEqual(0)
+      expect(x).toBeLessThanOrEqual(1)
+    }
+    expect(pos.get('older')!.x).toBe(0) // older than the domain clamps to the left edge
+    expect(pos.get('nan')!.x).toBe(0.5) // malformed → centre, never NaN
+  })
 })

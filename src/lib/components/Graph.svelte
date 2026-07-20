@@ -1216,6 +1216,10 @@
     items = []
     cursor = undefined
     turnoverOffset = 0
+    // A different feed's time span is unrelated to the frozen domain: drop it so
+    // the next layout rebuilds from the new corpus rather than mapping every post
+    // through a stale range (which can collapse them onto one column).
+    timeDomain = null
     load(false)
   })
 
