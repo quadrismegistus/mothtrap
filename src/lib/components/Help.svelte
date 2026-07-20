@@ -62,9 +62,12 @@
     <section>
       <h3>Keyboard</h3>
       <dl class="keys">
+        <div><kbd>←</kbd><kbd>→</kbd><span>Move to the previous / next post (older / newer)</span></div>
+        <div><kbd>↑</kbd><kbd>↓</kbd><span>Privately like / dislike the selected post — also dismisses it</span></div>
+        <div><kbd>Y</kbd><kbd>N</kbd><span>Like / dislike the hovered post (same as ↑ / ↓)</span></div>
         <div><kbd>D</kbd><span>Dismiss the hovered post (and its replies)</span></div>
         <div><kbd>R</kbd><span>Load more posts</span></div>
-        <div><kbd>N</kbd><span>Next batch from the queue</span></div>
+        <div><kbd>N</kbd><span>Next batch from the queue (when no post is hovered)</span></div>
         <div><kbd>L</kbd><span>Jump back to the newest</span></div>
         <div><kbd>Esc</kbd><span>Close a card, popover, or dialog</span></div>
         <div><kbd>⌘/Ctrl</kbd><kbd>↵</kbd><span>Send, in the composer</span></div>
