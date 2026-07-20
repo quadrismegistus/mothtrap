@@ -8,12 +8,14 @@
   import Help from './lib/components/Help.svelte'
   import ReportDialog from './lib/components/ReportDialog.svelte'
   import Settings from './lib/components/Settings.svelte'
+  import ReactionsPanel from './lib/components/ReactionsPanel.svelte'
   import Terms from './lib/components/Terms.svelte'
   import { terms } from './lib/state/terms.svelte'
   import DigestConsent from './lib/components/DigestConsent.svelte'
 
   let showHelp = $state(false)
   let showSettings = $state(false)
+  let showReactions = $state(false)
 
   session.init()
 
@@ -51,6 +53,12 @@
       </div>
       <div class="who">
         <button class="help" title="How Mothtrap works" aria-label="Help" onclick={() => (showHelp = true)}>?</button>
+        <button
+          class="reactions-btn"
+          title="Your reactions — who to unfollow"
+          aria-label="Your reactions"
+          onclick={() => (showReactions = true)}>👍</button
+        >
         <button class="settings-btn" title="Settings" aria-label="Settings" onclick={() => (showSettings = true)}>⚙</button>
         <button class="compose-btn" onclick={() => compose.openNew()}
           ><span class="wide-only">New post</span><span class="narrow-only">Post</span></button
@@ -77,6 +85,9 @@
   {/if}
   {#if showSettings}
     <Settings onclose={() => (showSettings = false)} />
+  {/if}
+  {#if showReactions}
+    <ReactionsPanel onclose={() => (showReactions = false)} />
   {/if}
 {/if}
 
@@ -155,6 +166,7 @@
     color: var(--text-dim);
   }
   .who .help,
+  .who .reactions-btn,
   .who .settings-btn {
     width: 30px;
     height: 30px;
@@ -163,6 +175,10 @@
     font-weight: 700;
     display: grid;
     place-items: center;
+  }
+  .who .reactions-btn {
+    font-size: 0.8rem;
+    line-height: 1;
   }
   .who button {
     padding: 0.35rem 0.7rem;
