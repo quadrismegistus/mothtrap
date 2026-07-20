@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { mkPost } from '../testing'
 import { postScoreRate } from './score'
+import { buildConversations, planView } from './conversations'
 import {
   buildGraph,
+  climbChain,
   layoutPositions,
   MAX_THREAD_REPLIES,
   selectVisible,
@@ -439,6 +441,74 @@ describe('self-reply runs', () => {
     expect(g.memberNode.get('at://x/op2')).toBe('at://x/op2') // op2 is its own node
     expect(g.edges.find((e) => e.from === 'at://x/op2')?.to).toBe('at://x/ext') // → stranger, not the run
     expect(g.nodes).toHaveLength(3) // run + stranger + op's answer
+  })
+})
+
+describe('climbChain', () => {
+  // A linear reply chain c → b → a → root (child points to parent).
+  const nodes = { root: { uri: 'root' }, a: { uri: 'a' }, b: { uri: 'b' }, c: { uri: 'c' } }
+  const parent: Record<string, string> = { c: 'b', b: 'a', a: 'root' }
+  const parentOf = (n: { uri: string }) => (parent[n.uri] ? nodes[parent[n.uri] as keyof typeof nodes] : undefined)
+
+  it('pulls the whole ancestry with no prune', () => {
+    const into = new Map([['c', nodes.c]])
+    climbChain([nodes.c], into, parentOf)
+    expect([...into.keys()].sort()).toEqual(['a', 'b', 'c', 'root'])
+  })
+
+  it('truncates at a pruned ancestor — it AND everything above it drop out', () => {
+    // `a` is the "silenced" ancestor: a and root vanish; c and its nearer parent b stay.
+    const into = new Map([['c', nodes.c]])
+    climbChain([nodes.c], into, parentOf, (n) => n.uri === 'a')
+    expect([...into.keys()].sort()).toEqual(['b', 'c'])
+  })
+
+  it('prunes a silenced ancestor at ANY depth (immediate parent case)', () => {
+    const into = new Map([['c', nodes.c]])
+    climbChain([nodes.c], into, parentOf, (n) => n.uri === 'b') // b is c's immediate parent
+    expect([...into.keys()].sort()).toEqual(['c']) // b, a, root all gone
+  })
+})
+
+describe('hide muted replies: silenced ancestors (#59)', () => {
+  // op is MUTED and reached only as reply context (muted authors are filtered
+  // from the primary feed); two followed accounts reply down the chain.
+  const M = 'at://did:plc:muted/app.bsky.feed.post/m'
+  const F = 'at://did:plc:fol/app.bsky.feed.post/f'
+  const G = 'at://did:plc:fol2/app.bsky.feed.post/g'
+  const chain = [
+    mkPost({ uri: M, author: 'muted.test', text: 'muted root' }),
+    mkPost({ uri: F, parent: M, root: M, author: 'fol.test', text: 'reply to the muted post' }),
+    mkPost({ uri: G, parent: F, root: M, author: 'fol2.test', text: 'reply to the reply' }),
+  ]
+  const primaryUris = new Set([F, G])
+  const plannedFull = (items: typeof chain) => {
+    const plan = planView(buildConversations(items, primaryUris), {
+      budget: 50,
+      autoUnrollMax: 10,
+      perAuthorMax: 3,
+    })
+    const s = new Set<string>()
+    for (const p of plan) if (p.level === 'full') for (const m of p.nodes) s.add(m.post.uri)
+    return s
+  }
+
+  it('a muted ancestor WOULD be a seated full-planned member (the leak the fix closes)', () => {
+    // This is why a climb-time prune alone was inert: the muted root is planned
+    // full and buildGraph emits it as a node, seated before any chain-climb.
+    expect(plannedFull(chain).has(M)).toBe(true)
+    const g = buildGraph(chain, plannedFull(chain), primaryUris, new Set(), true)
+    expect(g.nodes.map((n) => n.uri)).toContain(M)
+  })
+
+  it('excluding the silenced author from the graph input drops the muted node, keeps the replies', () => {
+    // The fix filters silenced authors out of `visible` (the buildGraph input).
+    const visible = chain.filter((i) => i.post.author.handle !== 'muted.test')
+    const g = buildGraph(visible, plannedFull(visible), primaryUris, new Set(), true)
+    const uris = g.nodes.map((n) => n.uri)
+    expect(uris).not.toContain(M) // no muted hub
+    expect(uris).toContain(F) // followed replies stay
+    expect(uris).toContain(G)
   })
 })
 
