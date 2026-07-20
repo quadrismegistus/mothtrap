@@ -1623,6 +1623,23 @@
     if (total > budget) turnoverOffset = (turnoverOffset + budget) % total
   }
 
+  // Keyboard navigation along the time axis (x): ← older, → newer, matching the
+  // "older · newer →" axis. Steps the selection through the placed nodes ordered
+  // by x. With nothing selected an arrow jumps to the extreme it points at — →
+  // to the newest (rightmost), ← to the oldest (leftmost).
+  function navigate(dir: 1 | -1) {
+    const order = [...placed].sort((a, b) => a.px - b.px)
+    if (!order.length) return
+    const cur = hovered ? order.findIndex((p) => p.node.uri === hovered) : -1
+    const next =
+      cur === -1
+        ? dir === 1
+          ? order.length - 1
+          : 0
+        : Math.max(0, Math.min(order.length - 1, cur + dir))
+    setHovered(order[next].node.uri)
+  }
+
   // Hover with a short close delay so the pointer can travel from a node to its
   // card (and interact with it) without the card vanishing.
   let clearTimer: ReturnType<typeof setTimeout> | undefined
@@ -1704,7 +1721,21 @@
     // meaning (nextBatch) — same hover-scoped overload the `d` key already uses.
     else if (k === 'y' && hovered) react(hovered, 'up')
     else if (k === 'n' && hovered) react(hovered, 'down')
-    else if (k === 'r') load(true)
+    // Arrow keys: ←/→ walk the timeline, ↑/↓ rate the selected post (aliases of
+    // y/n, so they also dismiss). preventDefault stops the page from scrolling.
+    else if (e.key === 'ArrowUp' && hovered) {
+      e.preventDefault()
+      react(hovered, 'up')
+    } else if (e.key === 'ArrowDown' && hovered) {
+      e.preventDefault()
+      react(hovered, 'down')
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault()
+      navigate(1)
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault()
+      navigate(-1)
+    } else if (k === 'r') load(true)
     else if (k === 'n') nextBatch()
     else if (k === 'l') turnoverOffset = 0
   }
