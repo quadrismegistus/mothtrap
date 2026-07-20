@@ -201,6 +201,20 @@ describe('moderation actions', () => {
     expect(moderation.isMuted(item.post.author)).toBe(false)
   })
 
+  it('isSilenced is true for a muted author (drives reply-chain pruning)', async () => {
+    const a = makeItem().post.author
+    expect(moderation.isSilenced(a)).toBe(false)
+    await moderation.mute(a)
+    expect(moderation.isSilenced(a)).toBe(true)
+  })
+
+  it('isSilenced is true for a blocked author too', async () => {
+    const a = makeItem().post.author
+    expect(moderation.isSilenced(a)).toBe(false)
+    await moderation.block(a)
+    expect(moderation.isSilenced(a)).toBe(true)
+  })
+
   it('reads block state the feed already carried, and unblocks with its uri', async () => {
     const server = makeItem({ viewer: { blocking: 'at://me/app.bsky.graph.block/xyz' } })
     expect(moderation.isBlocked(server.post.author)).toBe(true)

@@ -3,6 +3,7 @@ import { mkPost } from '../testing'
 import { postScoreRate } from './score'
 import {
   buildGraph,
+  climbChain,
   layoutPositions,
   MAX_THREAD_REPLIES,
   selectVisible,
@@ -439,6 +440,32 @@ describe('self-reply runs', () => {
     expect(g.memberNode.get('at://x/op2')).toBe('at://x/op2') // op2 is its own node
     expect(g.edges.find((e) => e.from === 'at://x/op2')?.to).toBe('at://x/ext') // → stranger, not the run
     expect(g.nodes).toHaveLength(3) // run + stranger + op's answer
+  })
+})
+
+describe('climbChain', () => {
+  // A linear reply chain c → b → a → root (child points to parent).
+  const nodes = { root: { uri: 'root' }, a: { uri: 'a' }, b: { uri: 'b' }, c: { uri: 'c' } }
+  const parent: Record<string, string> = { c: 'b', b: 'a', a: 'root' }
+  const parentOf = (n: { uri: string }) => (parent[n.uri] ? nodes[parent[n.uri] as keyof typeof nodes] : undefined)
+
+  it('pulls the whole ancestry with no prune', () => {
+    const into = new Map([['c', nodes.c]])
+    climbChain([nodes.c], into, parentOf)
+    expect([...into.keys()].sort()).toEqual(['a', 'b', 'c', 'root'])
+  })
+
+  it('truncates at a pruned ancestor — it AND everything above it drop out', () => {
+    // `a` is the "silenced" ancestor: a and root vanish; c and its nearer parent b stay.
+    const into = new Map([['c', nodes.c]])
+    climbChain([nodes.c], into, parentOf, (n) => n.uri === 'a')
+    expect([...into.keys()].sort()).toEqual(['b', 'c'])
+  })
+
+  it('prunes a silenced ancestor at ANY depth (immediate parent case)', () => {
+    const into = new Map([['c', nodes.c]])
+    climbChain([nodes.c], into, parentOf, (n) => n.uri === 'b') // b is c's immediate parent
+    expect([...into.keys()].sort()).toEqual(['c']) // b, a, root all gone
   })
 })
 

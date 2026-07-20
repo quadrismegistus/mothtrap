@@ -425,6 +425,12 @@ class Moderation {
     return this.#blocked.has(actor.did) || !!actor.viewer?.blocking
   }
 
+  /** Muted OR blocked — the accounts "hide muted replies" prunes from reply
+   * chains, and the same suppression `hidden()` applies to a post's own author. */
+  isSilenced(actor: Actor): boolean {
+    return this.isMuted(actor) || this.isBlocked(actor)
+  }
+
   async mute(actor: Actor) {
     if (this.isMuted(actor)) return
     // Remember whether we consumed an un-mute: the rollback has to put it back,

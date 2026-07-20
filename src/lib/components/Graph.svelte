@@ -4,6 +4,7 @@
   import { bskyUrl, reposter, reposterProfile } from '../api/post'
   import {
     buildGraph,
+    climbChain,
     contextNode,
     layoutPositions,
     parentUriOf,
@@ -346,24 +347,22 @@
       // its whole thread (and every resurrected dismissal in it) onto the map,
       // blowing past the plan (the 90/37 cat pile).
       const byUri = new Map(graph.nodes.map((n) => [n.uri, n]))
-      let frontier = [...set.values()].filter((n) => plannedFullUris.has(n.uri) || pinned.has(n.uri))
-      while (frontier.length) {
-        const next: GraphNode[] = []
-        for (const n of frontier) {
-          const raw = parentUriOf(n.item)
-          if (!raw) continue
-          const p = graph.memberNode.get(raw) ?? raw // the node DISPLAYING the parent
-          if (p === n.uri || set.has(p)) continue
-          const pn = byUri.get(p) ?? (() => {
-            const it = contextByUri.get(raw)
-            return it ? contextNode(it, read.isDismissed(raw)) : undefined
-          })()
-          if (!pn) continue // parent not loaded (yet) — the fetch effect is on it
-          set.set(pn.uri, pn)
-          next.push(pn)
-        }
-        frontier = next
+      const parentNodeOf = (n: GraphNode): GraphNode | undefined => {
+        const raw = parentUriOf(n.item)
+        if (!raw) return undefined
+        const p = graph.memberNode.get(raw) ?? raw // the node DISPLAYING the parent
+        const it = byUri.get(p) ? undefined : contextByUri.get(raw)
+        return byUri.get(p) ?? (it ? contextNode(it, read.isDismissed(raw)) : undefined)
       }
+      const starts = [...set.values()].filter((n) => plannedFullUris.has(n.uri) || pinned.has(n.uri))
+      // "Hide muted replies" TRUNCATES a chain at a silenced ancestor: the muted
+      // account and everything above it drop out (at any depth — climbChain checks
+      // each hop), instead of showing the muted node as the hub a followed reply
+      // hangs off. Off by default, so ordinary chains keep their full ancestry.
+      const prune = settings.hideMutedReplies
+        ? (a: GraphNode) => moderation.isSilenced(a.item.post.author)
+        : undefined
+      climbChain(starts, set, parentNodeOf, prune)
     }
     return [...set.values()]
   })

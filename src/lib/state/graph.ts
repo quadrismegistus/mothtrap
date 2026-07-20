@@ -146,6 +146,37 @@ export function segmentRuns(members: FeedItem[]): FeedItem[][] {
 }
 
 /**
+ * Climb reply chains: from each start node, walk up its ancestry (via `parentOf`)
+ * adding every ancestor to `into`, until a parent isn't loaded or is already in.
+ *
+ * `prune`, when given, TRUNCATES a chain: an ancestor it returns true for is
+ * excluded AND the walk does not climb past it. This is how "hide muted replies"
+ * cuts a chain that leads to a silenced account — the muted ancestor and
+ * everything above it drop out, while the reply and any nearer ancestors stay
+ * (the walk checks every hop, so a silenced account at any depth is caught).
+ * Pure and node-shape-agnostic (only `.uri` is read) so it unit-tests directly.
+ */
+export function climbChain<T extends { uri: string }>(
+  starts: T[],
+  into: Map<string, T>,
+  parentOf: (node: T) => T | undefined,
+  prune?: (ancestor: T) => boolean,
+): void {
+  let frontier = starts
+  while (frontier.length) {
+    const next: T[] = []
+    for (const n of frontier) {
+      const pn = parentOf(n)
+      if (!pn || pn.uri === n.uri || into.has(pn.uri)) continue
+      if (prune?.(pn)) continue // silenced ancestor: exclude it and stop climbing here
+      into.set(pn.uri, pn)
+      next.push(pn)
+    }
+    frontier = next
+  }
+}
+
+/**
  * The conversation model (PLAN §8): the graph as a first-class data structure.
  *
  * Every display decision this app makes — what to show, what to collapse, what
