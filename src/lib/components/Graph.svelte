@@ -987,13 +987,25 @@
     return `M${x1.toFixed(1)},${y1.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`
   }
 
-  // POINTS SPIKE: reply chains aren't drawn on the map — they're read in the
-  // thread-view dialog. Suppressing the reply edges keeps the scatter clean (no
-  // long connectors between a reply and its far-off parent). Topic edges (pill →
-  // members) are drawn separately below and stay. Flip to `false` to compare.
-  const SHOW_REPLY_EDGES = false
+  // POINTS SPIKE: reply structure ON DEMAND. At rest the scatter draws no reply
+  // edges — no permanent connectors dragging the eye between a reply and its
+  // far-off parent. Hovering (or keyboard-selecting) a post lights its
+  // conversation up: edges draw between the chain's members for exactly as long
+  // as you're looking. Reading a whole thread is the thread-view dialog's job.
+  const hoveredChain = $derived.by(() => {
+    if (!hovered) return new Set<string>()
+    for (const c of convos) {
+      if (c.members.some((m) => m.post.uri === hovered)) {
+        return new Set(c.members.map((m) => displayNodeOf(m.post.uri)))
+      }
+    }
+    return new Set<string>()
+  })
   const edgeLines = $derived.by(() =>
-    (SHOW_REPLY_EDGES ? visibleEdges : [])
+    (hoveredChain.size > 1
+      ? visibleEdges.filter((e) => hoveredChain.has(e.from) || hoveredChain.has(e.to))
+      : []
+    )
       .map((e) => {
         const a = placedByUri.get(e.from) // reply
         const b = placedByUri.get(e.to) // parent
@@ -2150,6 +2162,7 @@
       enter={enterFrom(p.px, p.py)}
       hasReplies={(edgeCount.get(p.node.uri) ?? 0) > 0}
       active={hovered === p.node.uri}
+      related={hoveredChain.size > 1 && hovered !== p.node.uri && hoveredChain.has(p.node.uri)}
       pinned={pinned.has(p.node.uri)}
       ghost={p.node.ghost ?? false}
       reaction={reactions.reactionOf(p.node.uri)}

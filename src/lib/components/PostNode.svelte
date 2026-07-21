@@ -19,6 +19,9 @@
     enter?: { x: number; y: number }
     hasReplies: boolean
     active: boolean
+    /** Fellow member of the hovered post's conversation — soft highlight so the
+     * chain reads as one thing while you look at any of its posts. */
+    related?: boolean
     pinned: boolean
     /** A dismissed ancestor resurrected for chain context — dimmed, no ✕. */
     ghost: boolean
@@ -46,6 +49,7 @@
     enter,
     hasReplies,
     active,
+    related = false,
     pinned,
     ghost,
     reaction,
@@ -156,6 +160,7 @@
   class:arriving
   class:entering={arriving && !landed}
   class:active
+  class:related
   class:pinned
   class:ghost
   class:unfollowed
@@ -298,6 +303,15 @@
   }
   .wrap.active {
     z-index: 50;
+  }
+  /* Fellow members of the hovered post's conversation: a softer ring in the
+     thread's topic colour (white fallback), dimmer than the gold active ring so
+     the chain reads as context around the post you're actually on. */
+  .wrap.related .node {
+    border-color: var(--accent-topic, rgba(255, 255, 255, 0.75));
+    box-shadow:
+      0 0 0 2px var(--bg),
+      0 0 0 4px var(--accent-topic, rgba(255, 255, 255, 0.45));
   }
   .wrap.pinned .node {
     border-color: #e0a838;
