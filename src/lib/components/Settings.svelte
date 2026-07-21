@@ -6,6 +6,7 @@
   import { reactions } from '../state/reactions.svelte'
   import { session } from '../state/session.svelte'
   import { terms } from '../state/terms.svelte'
+  import { exportToFile, importFromFile } from '../state/sync'
   import { isNative } from '../api/platform'
 
   interface Props {
@@ -40,6 +41,41 @@
       .catch(() => (stats = null))
       .finally(() => (loading = false))
   })
+
+  // Sync (Phase 0): manual encrypted export/import — see docs/sync-spec.md.
+  let syncPass = $state('')
+  let syncBusy = $state(false)
+  let syncMsg = $state<{ ok: boolean; text: string } | null>(null)
+  let importInput: HTMLInputElement
+  async function doExport() {
+    if (!syncPass || syncBusy) return
+    syncBusy = true
+    syncMsg = null
+    try {
+      await exportToFile(syncPass)
+      syncMsg = { ok: true, text: 'Exported. Move the file to your other device and Import it there with the same passphrase.' }
+    } catch (e) {
+      syncMsg = { ok: false, text: e instanceof Error ? e.message : 'Export failed.' }
+    } finally {
+      syncBusy = false
+    }
+  }
+  async function doImport(e: Event) {
+    const input = e.target as HTMLInputElement
+    const file = input.files?.[0]
+    if (!file || !syncPass) return
+    syncBusy = true
+    syncMsg = null
+    try {
+      const r = await importFromFile(file, syncPass)
+      syncMsg = { ok: true, text: `Imported — merged ${r.reactions} reactions and ${r.dismissed} dismissed posts.` }
+    } catch (err) {
+      syncMsg = { ok: false, text: err instanceof Error ? err.message : 'Import failed.' }
+    } finally {
+      syncBusy = false
+      input.value = '' // let the same file be re-picked
+    }
+  }
 
   let confirmingWipe = $state(false)
   let wiping = $state(false)
@@ -158,6 +194,39 @@
     </section>
 
     <section>
+      <h3>Sync across devices <span class="beta">beta</span></h3>
+      <p class="blurb">
+        Export your private reactions and dismissed posts to an <strong>encrypted</strong> file, then
+        import it on another device to merge them in. The file is AES-encrypted with a passphrase you
+        choose — useless to anyone without it, and nothing is sent anywhere. (Automatic sync is coming;
+        this is the manual version.)
+      </p>
+      <label class="pass">
+        <span>Passphrase</span>
+        <input
+          type="password"
+          bind:value={syncPass}
+          placeholder="a phrase only you know"
+          autocomplete="off"
+        />
+      </label>
+      <div class="actions">
+        <button onclick={doExport} disabled={syncBusy || !syncPass}>Export encrypted file</button>
+        <button onclick={() => importInput.click()} disabled={syncBusy || !syncPass}>Import a file…</button>
+        <input
+          bind:this={importInput}
+          type="file"
+          accept="application/json,.json"
+          onchange={doImport}
+          hidden
+        />
+      </div>
+      {#if syncMsg}
+        <p class="state" class:ok={syncMsg.ok} class:off={!syncMsg.ok}>{syncMsg.text}</p>
+      {/if}
+    </section>
+
+    <section>
       <h3>Account</h3>
       <p class="blurb">
         Signed in as <strong>@{session.handle}</strong> via {session.method === 'oauth'
@@ -238,6 +307,28 @@
   h3 {
     margin: 0 0 0.4rem;
     font-size: 0.9rem;
+  }
+  .beta {
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.05em 0.35em;
+    vertical-align: middle;
+  }
+  .pass {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin: 0 0 0.6rem;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+  }
+  .pass input {
+    font-size: 0.85rem;
+    padding: 0.4rem 0.5rem;
   }
   .state {
     margin: 0 0 0.35rem;
