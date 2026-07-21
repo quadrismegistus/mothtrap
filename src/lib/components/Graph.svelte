@@ -1205,14 +1205,42 @@
     return () => cancelAnimationFrame(tweenRaf)
   })
 
-  // Re-solve whenever targets change (new data, resize, dismissal, turnover),
-  // or when the pinned set changes (pinned nodes hold their positions).
+  // Re-solve when targets change — EXCEPT on a pure shrink during a batch.
+  // Targets are frozen per batch, but the SOLVER's equilibrium is a function of
+  // the whole set: remove one post and everything it was pushing against settles
+  // back toward its own target — a small global reshuffle on every dismiss. So
+  // while the batch and frame are unchanged: a dismissal (ids only removed)
+  // skips the re-solve entirely (survivors hold their exact solved positions;
+  // the hole is the point), and newcomers (an expanded thread) are solved with
+  // every already-placed node HELD, so they land collision-free without moving
+  // anyone. A frame change (resize, digest panel, pill width) or a batch change
+  // (refill — the deliberate reflow moment) does a full solve as before.
+  let solvedFor = new Set<string>()
+  let solvedSig = ''
+  let solvedBatch: Set<string> | null = null
   $effect(() => {
     const t = [...targets, ...topicTargets]
     layout?.setCollision(pill ? pill.gap : null) // rectangles vs circles
     // POINTS SPIKE: no reservoir bleed — the solver keeps everything inside the
     // frame (targets are already frame-mapped), so nothing lands off-screen.
     layout?.setBounds(w, h, 18, Math.max(24, bottomChrome), 0, 0)
+    const sig = `${w}|${h}|${bottomChrome}|${showDigest ? 1 : 0}|${pill ? pill.w : 0}`
+    const ids = new Set(t.map((x) => x.id))
+    if (batch !== null && batch === solvedBatch && sig === solvedSig) {
+      const hasNew = t.some((x) => !solvedFor.has(x.id))
+      if (!hasNew) {
+        solvedFor = ids
+        return // pure shrink — freeze
+      }
+      const hold = new Set(pinned)
+      for (const id of solvedFor) if (ids.has(id)) hold.add(id)
+      solvedFor = ids
+      layout?.update(t, hold)
+      return
+    }
+    solvedBatch = batch
+    solvedSig = sig
+    solvedFor = ids
     layout?.update(t, new Set(pinned))
   })
 
