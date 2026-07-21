@@ -1847,10 +1847,11 @@
       setHovered(node.uri)
       return
     }
-    clickTimer = setTimeout(() => {
-      togglePin(node)
-      focusChain(node.uri)
-    }, 220)
+    // POINTS SPIKE: click-to-pin is retired (temporarily) — a click now ONLY
+    // drives the focus lens, so after gathering a thread you're free to hover
+    // across its members without the clicked post's card frozen over the tree.
+    // Cards live on hover (and on pins made elsewhere, e.g. the digest panel).
+    clickTimer = setTimeout(() => focusChain(node.uri), 220)
   }
   function onNodeDblClick(node: GraphNode) {
     clearTimeout(clickTimer)
