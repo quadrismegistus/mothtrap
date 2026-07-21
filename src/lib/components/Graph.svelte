@@ -558,15 +558,16 @@
   // engagement) coordinate, mapped straight across the frame — the honest
   // scatter the semantic axes always promised, with no tidy-tree geometry
   // bending a reply's position away from where it belongs. Reply chains are read
-  // in the thread-view dialog, not drawn on the map. The only structure kept is
-  // the topic pill: a hub/label anchored over its cluster (the "tree from the
-  // topic node"). The collision solver only nudges genuine overlaps apart.
+  // in the thread-view dialog, not drawn on the map. Topic membership is worn BY
+  // the posts (caption + shared tint) rather than drawn as a hub node — a hub
+  // has no honest position on semantic axes, and its spokes are exactly the
+  // radiating connectors this layout exists to remove. The collision solver
+  // only nudges genuine overlaps apart.
   const pointLayout = $derived.by(() => {
     // The digest panel overlays the right edge when open; keep posts to its left.
     const panelW = showDigest ? Math.min(PANEL_W, w * 0.88) : 0
     const innerW = Math.max(0, w - 2 * PAD_X - panelW)
     const innerH = Math.max(0, h - PAD_TOP - Math.max(PAD_BOTTOM, bottomChrome + 8))
-    const present = new Set(visibleNodes.map((n) => n.uri))
     const sx = (x: number) => PAD_X + x * innerW
     const sy = (y: number) => PAD_TOP + y * innerH
 
@@ -580,31 +581,9 @@
         ...(pill ? { hw: pill.w / 2, hh: pill.h / 2 } : {}),
       }
     })
-
-    // Topic pills: anchor over the LOUDEST visible member (smallest y = highest
-    // engagement), lifted a touch so the label reads above the cluster rather
-    // than on top of the post. Members keep their own true positions — the pill
-    // is a hub/label, not a tree that pulls its members together.
-    const pillMap = new Map<string, Target>()
-    for (const m of topicMembership) {
-      const members = [...new Set(m.uris.map((u) => displayNodeOf(u)))].filter((u) => present.has(u))
-      if (members.length < 2) continue
-      let loudest = members[0]
-      for (const u of members)
-        if ((nodeLayout.get(u)?.y ?? 1) < (nodeLayout.get(loudest)?.y ?? 1)) loudest = u
-      const a = nodeLayout.get(loudest) ?? { x: 0.5, y: 0.5, sizeRank: 0.5 }
-      pillMap.set(m.sid, {
-        id: m.sid,
-        tx: sx(a.x),
-        ty: sy(Math.max(0, a.y - 0.04)),
-        r: 52,
-        ...(pill ? { hw: 52, hh: 14 } : {}),
-      })
-    }
-    return { posts, pills: pillMap }
+    return { posts }
   })
   const targets = $derived(pointLayout.posts)
-  const pillTargets = $derived(pointLayout.pills)
 
   const nodeByUri = $derived(new Map(visibleNodes.map((n) => [n.uri, n])))
 
@@ -691,8 +670,16 @@
       uris.forEach((u) => claimed.add(u))
       if (uris.length === 0) continue
       const color = convoColor(c.id)
+      // POINTS SPIKE: no topic hub nodes — every member wears the label as a
+      // caption over the post (the system singletons always used). A repeated
+      // label over scattered pills IS the topic network, read locally; the
+      // shared colour ties them. `pills` still feeds colour-painting and the
+      // digest panel; it just no longer draws a hub on the map.
       if (uris.length === 1) captions.set(uris[0], { label: c.label, color })
-      else pills.push({ id: c.id, sid: `topic:${c.id}`, label: c.label, color, uris })
+      else {
+        pills.push({ id: c.id, sid: `topic:${c.id}`, label: c.label, color, uris })
+        for (const u of uris) captions.set(u, { label: c.label, color })
+      }
     }
     return { pills, captions }
   })
@@ -727,51 +714,15 @@
     return m
   })
 
-  // Sim inputs use the members' STABLE target positions (not live ones), so the
-  // topic targets don't shift every tick — which would restart the sim forever.
-  const targetByUri = $derived(new Map(targets.map((t) => [t.id, t])))
-  const topicTargets = $derived.by<Target[]>(() =>
-    topicMembership
-      .map((m) => {
-        // 2+ visible members → the pill is a tree root (positioned by treeLayout);
-        // keep its wide collision radius but take the tree position.
-        const tree = pillTargets.get(m.sid)
-        if (tree) return { ...tree, r: 52 }
-        // Fewer than 2 visible → sit at the members' centroid, as before.
-        const pts = m.uris.map((u) => targetByUri.get(displayNodeOf(u))).filter((t): t is Target => t != null)
-        if (pts.length === 0) return null
-        return {
-          id: m.sid,
-          tx: pts.reduce((s, t) => s + t.tx, 0) / pts.length,
-          ty: pts.reduce((s, t) => s + t.ty, 0) / pts.length,
-          r: 52, // big collision radius — the topic pill is wide
-        }
-      })
-      .filter((t): t is Target => t !== null),
-  )
-
-  // Render: topic nodes + edges positioned from the LIVE sim positions. A
-  // conversation with no visible members simply isn't drawn.
-  const annotations = $derived.by(() =>
-    topicMembership
-      .map((m) => {
-        const pts = m.uris
-          .map((u) => placedByUri.get(displayNodeOf(u)))
-          .filter((p): p is NonNullable<typeof p> => p != null)
-        if (pts.length === 0) return null
-        const cx = pts.reduce((s, p) => s + p.px, 0) / pts.length
-        const cy = pts.reduce((s, p) => s + p.py, 0) / pts.length
-        const members = pts.map((p) => ({ uri: p.node.uri, x: p.px, y: p.py }))
-        return { id: m.id, sid: m.sid, label: m.label, color: m.color, cx, cy, uris: m.uris, members }
-      })
-      .filter((a): a is NonNullable<typeof a> => a !== null),
-  )
-  const topics = $derived(
-    annotations.map((a) => {
-      const p = positions.get(a.sid)
-      return { ...a, tx: p?.x ?? a.cx, ty: p?.y ?? a.cy }
-    }),
-  )
+  // POINTS SPIKE: topic hub nodes and their radiating edges are retired — every
+  // member wears its topic as a caption + tint instead (topicView above). No
+  // synthetic layout targets, no hub buttons, no spoke edges. The lost map
+  // verbs (click-to-reveal, D-to-dismiss-topic) can return on the captions if
+  // missed; the digest panel still has them.
+  const topicTargets = $derived.by<Target[]>(() => [])
+  const topics = $derived<
+    { id: string; sid: string; label: string; color: string; tx: number; ty: number; uris: string[]; members: { uri: string; x: number; y: number }[] }[]
+  >([])
 
   // The OP a reply should be represented by: its thread root if we've loaded it,
   // else the highest ancestor we DO have (climbing parent links), else the post
