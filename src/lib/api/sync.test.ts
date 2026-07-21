@@ -114,6 +114,53 @@ describe('sync key-based crypto (#80 Phase 1 — cacheable key)', () => {
   })
 })
 
+describe('sync gzip payload (#83 §6)', () => {
+  /** Build a pre-gzip (legacy) envelope by hand: RAW JSON plaintext, no `zip`
+   * field — exactly what already sits on the live PDS from Phase 0/1. */
+  async function legacyEnvelope(d: SyncDoc, key: CryptoKey, salt: Uint8Array): Promise<SyncEnvelope> {
+    const iv = crypto.getRandomValues(new Uint8Array(12))
+    const pt = new TextEncoder().encode(JSON.stringify(d))
+    const ct = new Uint8Array(
+      await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv as BufferSource }, key, pt as BufferSource),
+    )
+    const b64 = (u: Uint8Array) => Buffer.from(u).toString('base64')
+    return { v: 1, kdf: 'PBKDF2-SHA256', iter: ITER, cipher: 'AES-256-GCM', salt: b64(salt), iv: b64(iv), ct: b64(ct) }
+  }
+
+  it('gzip-compresses before encrypt, stamps `zip`, and round-trips', async () => {
+    const salt = randomSalt()
+    const key = await deriveSyncKey('pw', salt)
+    const env = await encryptWithKey(doc(), key, salt)
+    expect(env.zip).toBe('gzip') // (e) the envelope advertises the compression
+    // (c) the plaintext must not survive anywhere in the envelope.
+    expect(JSON.stringify(env)).not.toContain('at://p/1')
+    // (a) full gzip encrypt → decrypt round-trip.
+    expect(await decryptWithKey(env, key)).toEqual(doc())
+  })
+
+  it('decrypts a LEGACY (pre-gzip) envelope with no `zip` field', async () => {
+    const salt = randomSalt()
+    const key = await deriveSyncKey('pw', salt)
+    const legacy = await legacyEnvelope(doc(), key, salt)
+    expect('zip' in legacy).toBe(false) // (b) genuinely legacy shape
+    expect(await decryptWithKey(legacy, key)).toEqual(doc())
+  })
+
+  it('a wrong key against a gzip envelope still throws the friendly error', async () => {
+    const salt = randomSalt()
+    const env = await encryptWithKey(doc(), await deriveSyncKey('right', salt), salt)
+    // (d) GCM tag fails before we ever reach gunzip → the friendly message.
+    await expect(decryptWithKey(env, await deriveSyncKey('wrong', salt))).rejects.toThrow(
+      /passphrase|corrupt/i,
+    )
+  })
+
+  it('rejects an unknown `zip` value up front (before deriving a key)', async () => {
+    const env = await encryptDoc(doc(), 'pw')
+    await expect(decryptDoc({ ...env, zip: 'brotli' as never }, 'pw')).rejects.toThrow(/format/i)
+  })
+})
+
 describe('sync merges (#80 Phase 0 CRDTs)', () => {
   it('reactions merge last-write-wins per uri by t', () => {
     const local = [r('at://p/1', 'up', 5), r('at://p/2', 'up', 10)]
