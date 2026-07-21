@@ -6,7 +6,7 @@
   import { reactions } from '../state/reactions.svelte'
   import { session } from '../state/session.svelte'
   import { terms } from '../state/terms.svelte'
-  import { exportToFile, importFromFile } from '../state/sync'
+  import { exportToFile, importFromFile, sync } from '../state/sync.svelte'
   import { isNative } from '../api/platform'
 
   interface Props {
@@ -76,6 +76,33 @@
       input.value = '' // let the same file be re-picked
     }
   }
+  async function enableSync() {
+    if (!syncPass) return
+    syncMsg = null
+    try {
+      await sync.enable(syncPass)
+      syncPass = ''
+      syncMsg = { ok: true, text: 'Sync is on — turn it on with the same passphrase on your other devices.' }
+    } catch (e) {
+      syncMsg = { ok: false, text: e instanceof Error ? e.message : 'Could not turn on sync.' }
+    }
+  }
+  async function syncNow() {
+    syncMsg = null
+    await sync.syncNow()
+    syncMsg = sync.error ? { ok: false, text: sync.error } : { ok: true, text: 'Synced to your account.' }
+  }
+  async function turnOffSync() {
+    await sync.disable(false)
+    syncMsg = { ok: true, text: 'Sync turned off on this device (your other devices keep their copy).' }
+  }
+  function fmtLast(t: number | null): string {
+    if (!t) return ''
+    const s = Math.round((Date.now() - t) / 1000)
+    if (s < 60) return 'just now'
+    if (s < 3600) return `${Math.round(s / 60)}m ago`
+    return `${Math.round(s / 3600)}h ago`
+  }
 
   let confirmingWipe = $state(false)
   let wiping = $state(false)
@@ -89,6 +116,10 @@
       // doesn't touch, and the UI promises "everything stored is gone."
       await read.purge()
       await reactions.purge()
+      // Turn off sync locally too (drop the cached key), or a wipe would silently
+      // re-pull everything from the PDS on next login. Leaves the remote copy —
+      // deleting that is a separate, explicit choice.
+      await sync.disable(false)
       digest.clear()
       stats = null
       wiped = true
@@ -196,10 +227,10 @@
     <section>
       <h3>Sync across devices <span class="beta">beta</span></h3>
       <p class="blurb">
-        Export your private reactions and dismissed posts to an <strong>encrypted</strong> file, then
-        import it on another device to merge them in. The file is AES-encrypted with a passphrase you
-        choose — useless to anyone without it, and nothing is sent anywhere. (Automatic sync is coming;
-        this is the manual version.)
+        Keep your private reactions and dismissed posts in step across devices, <strong>end-to-end
+        encrypted</strong> with a passphrase you choose. The data is stored in your own Bluesky account
+        as ciphertext — nobody (not Bluesky, not us) can read it without the passphrase, and there's no
+        Mothtrap server involved.
       </p>
       <label class="pass">
         <span>Passphrase</span>
@@ -210,17 +241,43 @@
           autocomplete="off"
         />
       </label>
-      <div class="actions">
-        <button onclick={doExport} disabled={syncBusy || !syncPass}>Export encrypted file</button>
-        <button onclick={() => importInput.click()} disabled={syncBusy || !syncPass}>Import a file…</button>
-        <input
-          bind:this={importInput}
-          type="file"
-          accept="application/json,.json"
-          onchange={doImport}
-          hidden
-        />
-      </div>
+
+      {#if sync.enabled}
+        <p class="state ok">
+          Sync is on{sync.lastSynced ? ` — last synced ${fmtLast(sync.lastSynced)}` : ''}.
+        </p>
+        <div class="actions">
+          <button class="primary" onclick={syncNow} disabled={sync.busy}
+            >{sync.busy ? 'Syncing…' : 'Sync now'}</button
+          >
+          <button onclick={turnOffSync} disabled={sync.busy}>Turn off on this device</button>
+        </div>
+      {:else}
+        <div class="actions">
+          <button class="primary" onclick={enableSync} disabled={sync.busy || !syncPass}>
+            {sync.busy ? 'Turning on…' : 'Turn on sync'}
+          </button>
+        </div>
+      {/if}
+
+      <details class="alt">
+        <summary>Or transfer with a file</summary>
+        <p class="blurb">
+          Export an encrypted file and import it on another device — no account round-trip.
+        </p>
+        <div class="actions">
+          <button onclick={doExport} disabled={syncBusy || !syncPass}>Export encrypted file</button>
+          <button onclick={() => importInput.click()} disabled={syncBusy || !syncPass}>Import a file…</button>
+          <input
+            bind:this={importInput}
+            type="file"
+            accept="application/json,.json"
+            onchange={doImport}
+            hidden
+          />
+        </div>
+      </details>
+
       {#if syncMsg}
         <p class="state" class:ok={syncMsg.ok} class:off={!syncMsg.ok}>{syncMsg.text}</p>
       {/if}
@@ -329,6 +386,14 @@
   .pass input {
     font-size: 0.85rem;
     padding: 0.4rem 0.5rem;
+  }
+  .alt {
+    margin: 0.5rem 0 0;
+  }
+  .alt summary {
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: var(--text-dim);
   }
   .state {
     margin: 0 0 0.35rem;

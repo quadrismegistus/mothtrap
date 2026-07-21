@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { decryptDoc, encryptDoc, mergeDismissed, mergeReactions, type SyncDoc } from './sync'
+import {
+  decryptDoc,
+  decryptWithKey,
+  deriveSyncKey,
+  encryptDoc,
+  encryptWithKey,
+  envelopeSalt,
+  exportRawKey,
+  importRawKey,
+  mergeDismissed,
+  mergeReactions,
+  randomSalt,
+  type SyncDoc,
+} from './sync'
 import type { Reaction } from '../state/reactions.svelte'
 
 const r = (uri: string, reaction: 'up' | 'down', t: number): Reaction => ({
@@ -52,6 +65,37 @@ describe('sync crypto (#80 Phase 0)', () => {
   it('a malformed envelope yields the friendly error, not a raw base64 exception', async () => {
     const env = await encryptDoc(doc(), 'pw')
     await expect(decryptDoc({ ...env, salt: 'not base64 !!' }, 'pw')).rejects.toThrow(/passphrase|corrupt/i)
+  })
+})
+
+describe('sync key-based crypto (#80 Phase 1 — cacheable key)', () => {
+  it('encrypt/decrypt with a derived key round-trips', async () => {
+    const salt = randomSalt()
+    const key = await deriveSyncKey('pw', salt)
+    expect(await decryptWithKey(await encryptWithKey(doc(), key, salt), key)).toEqual(doc())
+  })
+
+  it('a key survives export→import (the on-device cache) and still decrypts', async () => {
+    const salt = randomSalt()
+    const key = await deriveSyncKey('pw', salt)
+    const env = await encryptWithKey(doc(), key, salt)
+    const cached = await importRawKey(await exportRawKey(key))
+    expect(await decryptWithKey(env, cached)).toEqual(doc())
+  })
+
+  it('another device derives a compatible key from the same passphrase + the envelope salt', async () => {
+    const salt = randomSalt()
+    const env = await encryptWithKey(doc(), await deriveSyncKey('shared', salt), salt)
+    const deviceB = await deriveSyncKey('shared', envelopeSalt(env))
+    expect(await decryptWithKey(env, deviceB)).toEqual(doc())
+  })
+
+  it('a wrong-passphrase key fails to decrypt', async () => {
+    const salt = randomSalt()
+    const env = await encryptWithKey(doc(), await deriveSyncKey('right', salt), salt)
+    await expect(decryptWithKey(env, await deriveSyncKey('wrong', salt))).rejects.toThrow(
+      /passphrase|corrupt/i,
+    )
   })
 })
 
