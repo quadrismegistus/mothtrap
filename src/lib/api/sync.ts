@@ -21,6 +21,9 @@ export interface SyncEnvelope {
   kdf: 'PBKDF2-SHA256'
   iter: number
   cipher: 'AES-256-GCM'
+  /** Compression applied to the plaintext BEFORE encryption. Absent on legacy
+   * records (written uncompressed) — decrypt treats a missing field as raw JSON. */
+  zip?: 'gzip'
   salt: string // base64
   iv: string // base64
   ct: string // base64
@@ -47,6 +50,27 @@ function fromB64(b64: string): Uint8Array {
   for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i)
   return out
 }
+
+// gzip the plaintext before encrypting so every whole-doc push stays small (the
+// doc grows without bound and there are no deltas yet). CompressionStream /
+// DecompressionStream exist in the browser and in Node 18+ (the vitest env).
+// Read the readable to completion concurrently (via Response) so backpressure is
+// relieved and the writer's close() can't deadlock; `await done` then surfaces
+// any write-side error.
+async function pumpStream(
+  stream: CompressionStream | DecompressionStream,
+  bytes: Uint8Array,
+): Promise<Uint8Array> {
+  const writer = stream.writable.getWriter()
+  const done = writer.write(bytes as BufferSource).then(() => writer.close())
+  const out = new Uint8Array(await new Response(stream.readable).arrayBuffer())
+  await done
+  return out
+}
+const gzip = (bytes: Uint8Array): Promise<Uint8Array> =>
+  pumpStream(new CompressionStream('gzip'), bytes)
+const gunzip = (bytes: Uint8Array): Promise<Uint8Array> =>
+  pumpStream(new DecompressionStream('gzip'), bytes)
 
 /** Derive the AES key from a passphrase + salt. `extractable` is true only when
  * the key will be cached on-device for live PDS sync (so it can be exported to
@@ -100,6 +124,11 @@ function validateEnvelope(env: SyncEnvelope): void {
   if (typeof env.iter !== 'number' || env.iter < 100_000 || env.iter > 2_000_000) {
     throw new Error('Sync data has an unsupported key-derivation cost.')
   }
+  // Optional: absent (legacy, uncompressed) or 'gzip'. Anything else is a format
+  // we can't read — fail up front rather than after burning CPU on the key.
+  if (env.zip !== undefined && env.zip !== 'gzip') {
+    throw new Error('Unrecognised sync data format.')
+  }
 }
 
 /** Encrypt with an already-derived key + given salt (the salt lets other devices
@@ -111,7 +140,7 @@ export async function encryptWithKey(
   iter = ITER,
 ): Promise<SyncEnvelope> {
   const iv = crypto.getRandomValues(new Uint8Array(IV_LEN))
-  const pt = new TextEncoder().encode(JSON.stringify(doc))
+  const pt = await gzip(new TextEncoder().encode(JSON.stringify(doc)))
   const ct = new Uint8Array(
     await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv as BufferSource }, key, pt as BufferSource),
   )
@@ -120,6 +149,7 @@ export async function encryptWithKey(
     kdf: 'PBKDF2-SHA256',
     iter,
     cipher: 'AES-256-GCM',
+    zip: 'gzip',
     salt: toB64(salt),
     iv: toB64(iv),
     ct: toB64(ct),
@@ -131,12 +161,16 @@ export async function encryptWithKey(
 export async function decryptWithKey(env: SyncEnvelope, key: CryptoKey): Promise<SyncDoc> {
   validateEnvelope(env)
   try {
-    const pt = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: fromB64(env.iv) as BufferSource },
-      key,
-      fromB64(env.ct) as BufferSource,
+    const pt = new Uint8Array(
+      await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: fromB64(env.iv) as BufferSource },
+        key,
+        fromB64(env.ct) as BufferSource,
+      ),
     )
-    return JSON.parse(new TextDecoder().decode(pt)) as SyncDoc
+    // New records mark `zip: 'gzip'`; legacy records omit it and store raw JSON.
+    const json = env.zip === 'gzip' ? await gunzip(pt) : pt
+    return JSON.parse(new TextDecoder().decode(json)) as SyncDoc
   } catch {
     throw new Error('Wrong passphrase, or the data is corrupt.')
   }
