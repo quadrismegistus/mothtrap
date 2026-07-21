@@ -82,7 +82,11 @@
     try {
       await sync.enable(syncPass)
       syncPass = ''
-      syncMsg = { ok: true, text: 'Sync is on — turn it on with the same passphrase on your other devices.' }
+      // enable() swallows a failed initial push into sync.error (retryable) — don't
+      // claim success over it.
+      syncMsg = sync.error
+        ? { ok: false, text: sync.error }
+        : { ok: true, text: 'Sync is on — turn it on with the same passphrase on your other devices.' }
     } catch (e) {
       syncMsg = { ok: false, text: e instanceof Error ? e.message : 'Could not turn on sync.' }
     }

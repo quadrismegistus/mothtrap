@@ -11,6 +11,7 @@ import {
   envelopeSalt,
   exportRawKey,
   importRawKey,
+  ITER,
   randomSalt,
   type SyncDoc,
   type SyncEnvelope,
@@ -80,6 +81,7 @@ export async function importFromFile(
 
 const kKey = (did: string) => `skynets:synckey:${did}`
 const kSalt = (did: string) => `skynets:syncsalt:${did}`
+const kIter = (did: string) => `skynets:synciter:${did}`
 const kOn = (did: string) => `skynets:syncon:${did}`
 const kLast = (did: string) => `skynets:synclast:${did}`
 
@@ -90,20 +92,26 @@ class SyncState {
   error = $state<string | null>(null)
   #key: CryptoKey | null = null
   #salt: Uint8Array | null = null
+  // The PBKDF2 iteration count the cached key was derived under — stamped into
+  // every push so a JOINING device re-derives at the SAME cost (else the day ITER
+  // ever changes, joins fail and misreport as a wrong passphrase).
+  #iter: number = ITER
   #did: string | undefined
 
   /** On login: restore the cached key and, if sync is on, pull-and-merge. */
   async load(did: string) {
     this.#did = did
-    const [rawKey, rawSalt, on, last] = await Promise.all([
+    const [rawKey, rawSalt, iter, on, last] = await Promise.all([
       get<Uint8Array>(kKey(did)),
       get<Uint8Array>(kSalt(did)),
+      get<number>(kIter(did)),
       get<boolean>(kOn(did)),
       get<number>(kLast(did)),
     ])
     if (on && rawKey && rawSalt) {
       this.#key = await importRawKey(rawKey)
       this.#salt = rawSalt
+      this.#iter = iter ?? ITER
       this.enabled = true
       this.lastSynced = last ?? null
       this.pull().catch((e) => (this.error = msg(e))) // one-way pull-on-login
@@ -120,15 +128,17 @@ class SyncState {
     try {
       const remote = await getSyncState()
       const salt = remote ? envelopeSalt(remote) : randomSalt()
-      const iter = remote?.iter
+      const iter = remote?.iter ?? ITER
       const key = await deriveSyncKey(passphrase, salt, iter)
       if (remote) await decryptWithKey(remote, key) // wrong passphrase → throws here
       this.#key = key
       this.#salt = salt
+      this.#iter = iter
       const raw = await exportRawKey(key)
       await Promise.all([
         set(kKey(this.#did), raw),
         set(kSalt(this.#did), salt),
+        set(kIter(this.#did), iter),
         set(kOn(this.#did), true),
       ])
       this.enabled = true
@@ -159,7 +169,7 @@ class SyncState {
     this.error = null
     try {
       await this.pull()
-      await putSyncState(await encryptWithKey(buildDoc(), this.#key, this.#salt), this.#did)
+      await putSyncState(await encryptWithKey(buildDoc(), this.#key, this.#salt, this.#iter), this.#did)
       await this.#stamp()
     } catch (e) {
       this.error = msg(e)
@@ -171,7 +181,14 @@ class SyncState {
   /** Turn sync off on this device; optionally delete the remote record. */
   async disable(alsoDeleteRemote = false) {
     if (alsoDeleteRemote) await deleteSyncState().catch(() => {})
-    if (this.#did) await Promise.all([del(kKey(this.#did)), del(kSalt(this.#did)), del(kOn(this.#did)), del(kLast(this.#did))])
+    if (this.#did)
+      await Promise.all([
+        del(kKey(this.#did)),
+        del(kSalt(this.#did)),
+        del(kIter(this.#did)),
+        del(kOn(this.#did)),
+        del(kLast(this.#did)),
+      ])
     this.#key = null
     this.#salt = null
     this.enabled = false

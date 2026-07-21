@@ -54,7 +54,13 @@ export async function deleteSyncState(): Promise<void> {
   }
 }
 
+/** True ONLY for a genuinely-absent record. Keys off atproto's structured
+ * `error: 'RecordNotFound'` (XRPCError), with the specific message as a narrow
+ * fallback — NOT a broad `/not found/`, so a transient/proxy 404 rethrows and
+ * surfaces instead of being masked as "no record" (which would let enable() mint
+ * a fresh salt and clobber the real record, locking out other devices). */
 function isNotFound(e: unknown): boolean {
+  if (e && typeof e === 'object' && (e as { error?: string }).error === 'RecordNotFound') return true
   const m = e instanceof Error ? e.message : String(e)
-  return /not\s*found|could not locate|RecordNotFound/i.test(m)
+  return /could not locate record/i.test(m)
 }

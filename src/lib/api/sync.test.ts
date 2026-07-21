@@ -8,6 +8,7 @@ import {
   envelopeSalt,
   exportRawKey,
   importRawKey,
+  ITER,
   mergeDismissed,
   mergeReactions,
   randomSalt,
@@ -96,6 +97,17 @@ describe('sync key-based crypto (#80 Phase 1 — cacheable key)', () => {
     await expect(decryptWithKey(env, await deriveSyncKey('wrong', salt))).rejects.toThrow(
       /passphrase|corrupt/i,
     )
+  })
+
+  it('stamps the given iter so a joining device re-derives at the SAME cost', async () => {
+    const salt = randomSalt()
+    const iter = 200_000 // non-default
+    const env = await encryptWithKey(doc(), await deriveSyncKey('pw', salt, iter), salt, iter)
+    expect(env.iter).toBe(iter)
+    // deriving at the stamped iter works…
+    expect(await decryptWithKey(env, await deriveSyncKey('pw', envelopeSalt(env), env.iter))).toEqual(doc())
+    // …deriving at a different cost yields a different key → fails (the Finding-1 lockout).
+    await expect(decryptWithKey(env, await deriveSyncKey('pw', salt, ITER))).rejects.toThrow()
   })
 })
 
