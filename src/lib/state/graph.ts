@@ -312,7 +312,7 @@ function timeRank(d: TimeDomain, v: number): number {
  * two still sliced. Whatever is slicing them is not tail width, and 0.25 is the
  * better setting on both axes.
  */
-const NEW_TAIL = 0.25
+export const NEW_TAIL = 0.25
 
 /**
  * Positions with x frozen against `domain` and y/size ranked live over `corpus`.

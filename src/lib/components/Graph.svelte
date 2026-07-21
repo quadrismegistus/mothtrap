@@ -8,6 +8,7 @@
     climbChain,
     contextNode,
     buildTimeDomain,
+    NEW_TAIL,
     positionsFrozenTime,
     timeDomainIsStale,
     type TimeDomain,
@@ -261,10 +262,16 @@
   // feed the classifier (a bare reply is unclassifiable without it).
   const contextByUri = $derived(new Map(allItems.map((i) => [i.post.uri, i])))
   const primaryUris = $derived(new Set(primarySources.map((i) => i.post.uri)))
+  // POINTS SPIKE — the BATCH is the unit of layout. One set of posts is chosen,
+  // laid out well, and only DRAINS as you dismiss; live-poll arrivals and later
+  // pages pool invisibly for the next batch. Null = between batches (the plan
+  // selects freely and the capture effect below takes a snapshot).
+  let batch = $state<Set<string> | null>(null)
   const visible = $derived(
     allItems.filter(
       (i) =>
         !read.isDismissed(i.post.uri) &&
+        (batch === null || batch.has(i.post.uri)) &&
         // "Hide muted replies" drops silenced ANCESTORS from the graph entirely,
         // not just the feed. corpus.contextItems is unmoderated, so a muted
         // account pulled in as reply context reaches allItems; without this it
@@ -357,6 +364,32 @@
 
   const total = $derived(plan.length)
   const queued = $derived(plan.filter((p) => p.level === 'hidden').length)
+
+  // Batch capture: when between batches and the pool is stocked (budget met, or
+  // nothing left to fetch), snapshot the plan's chosen conversations — COMPLETE
+  // memberships, so a collapsed rep keeps its +N members — as the new batch.
+  $effect(() => {
+    if (batch !== null) return
+    if (plan.length === 0) return
+    // Let the fetcher stock the pool first, so a batch isn't captured at 3 posts
+    // when another page could fill it: wait while the pool is underfilled and
+    // more is coming (a fetch in flight, or a cursor the auto-load effect —
+    // which only runs between batches — will chase). Settles when the budget is
+    // met or the feed is exhausted.
+    if (total < budget && (loading || cursor)) return
+    const s = new Set<string>()
+    for (const p of plan) {
+      if (p.level === 'hidden') continue
+      for (const m of p.convo.members) s.add(m.post.uri)
+    }
+    batch = s
+  })
+  // Batch cleared → drop it; the plan re-selects from everything waiting and the
+  // capture above takes the next batch. This is the ONE moment a full re-layout
+  // happens — where a reflow is expected rather than disruptive.
+  $effect(() => {
+    if (batch !== null && total === 0 && !loading) batch = null
+  })
 
   // Which nodes to show (top/recent/mix), plus pinned nodes and — when "connect
   // replies" is on — the present ancestor chain of each shown node, so a reply is
@@ -462,13 +495,34 @@
   // tolerable because timeDomainIsStale is a pure test of the corpus, so a late
   // capture produces the same domain a prompt one would.
   let timeDomain: TimeDomain | null = null
+  // The batch's ranking BASELINE, captured once per batch (keyed by the batch
+  // Set's identity, same lazy-capture pattern as timeDomain above): the batch's
+  // own nodes + their time domain. Ranking WITHIN the batch spreads the visible
+  // set uniformly over the frame (corpus-wide ranks bunch it — the crowded
+  // bottom band); freezing the baseline for the batch's lifetime keeps every
+  // survivor's position fixed as the batch drains. Anything that joins mid-batch
+  // (an expanded thread's members, climbed-in ancestors) ranks against the same
+  // frozen arrays, slotting in honestly without moving anyone else.
+  let baseFor: Set<string> | null = null
+  let batchCorpus: GraphNode[] = []
+  let batchDomain: TimeDomain | null = null
   const nodeLayout = $derived.by(() => {
-    // POINTS SPIKE: always the corpus-frozen positions, in BOTH modes. A post's
-    // (time, engagement) is ranked against the whole corpus, so it doesn't drift
-    // as neighbours are dismissed — the honest, stable coordinate the points
-    // layout needs (layoutPositions re-ranks among the visible set, which drifts).
-    if (timeDomainIsStale(timeDomain, graph.nodes)) timeDomain = buildTimeDomain(graph.nodes)
-    return positionsFrozenTime(visibleNodes, graph.nodes, timeDomain!)
+    if (batch && baseFor !== batch) {
+      baseFor = batch
+      batchCorpus = visibleNodes
+      batchDomain = buildTimeDomain(batchCorpus)
+    }
+    if (!batch || !batchDomain || batchCorpus.length === 0) {
+      // Between batches (boot, feed switch): corpus-frozen, as before.
+      if (timeDomainIsStale(timeDomain, graph.nodes)) timeDomain = buildTimeDomain(graph.nodes)
+      return positionsFrozenTime(visibleNodes, graph.nodes, timeDomain!)
+    }
+    const pos = positionsFrozenTime(visibleNodes, batchCorpus, batchDomain)
+    // positionsFrozenTime reserves NEW_TAIL of x for newer-than-domain arrivals;
+    // a batch barely gets any, so stretch the head back over the full axis
+    // (post-domain arrivals clamp to the right edge, which is honest enough).
+    for (const p of pos.values()) p.x = Math.min(1, p.x / (1 - NEW_TAIL))
+    return pos
   })
 
   const visibleUris = $derived(new Set(visibleNodes.map((n) => n.uri)))
@@ -1230,11 +1284,12 @@
     if (suspects.length) follows.verify(suspects)
   })
 
-  // Keep the graph full: when the queue runs dry (fewer posts loaded than the
-  // budget) and more can be fetched, pull the next page. This is what makes
-  // dismissing a post backfill the next one so the visible count holds steady.
+  // Stock the pool BETWEEN batches: when the plan can't fill the budget and more
+  // can be fetched, pull the next page. Gated to batch === null — during a batch
+  // the count only drains (that's the point), so fetching to top it up would
+  // page through the entire feed for posts the filter holds invisible anyway.
   $effect(() => {
-    if (!loading && cursor && total < budget) load(true)
+    if (!loading && cursor && total < budget && batch === null) load(true)
   })
 
   // Feed switch: when the user picks a different feed tab, clear the loaded feed
@@ -1248,6 +1303,7 @@
     items = []
     cursor = undefined
     turnoverOffset = 0
+    batch = null // new feed, new batch (the capture effect takes a fresh one)
     // A different feed's time span is unrelated to the frozen domain: drop it so
     // the next layout rebuilds from the new corpus rather than mapping every post
     // through a stale range (which can collapse them onto one column).
