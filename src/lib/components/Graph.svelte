@@ -15,8 +15,10 @@
     parentUriOf,
     rootUriOf,
     threadDescendants,
+    treeTargets,
     type GraphNode,
     type SelectMode,
+    type TreeNode,
   } from '../state/graph'
   import { Layout, pillBudgetBase, type Target } from '../state/layout'
   import { buildConversations, planView } from '../state/conversations'
@@ -186,6 +188,12 @@
   // Threads the user has mapped in (by thread root uri), and pinned nodes (by uri).
   const expanded = new SvelteSet<string>()
   const pinned = new SvelteSet<string>()
+  // FOCUS LENS (points spike): the conversation temporarily gathered into tidy-
+  // tree form centre-stage (by conversation id). Click a chain member to focus;
+  // click the background (or a chainless post) to release. Non-members' targets
+  // never change and the solver is deterministic, so release restores their
+  // exact positions by construction.
+  let focusedThread = $state<string | null>(null)
   // Topic pills the user double-clicked to reveal ALL their member posts (by
   // conversation id), even those the node budget would otherwise leave off.
   const revealedTopics = new SvelteSet<string>()
@@ -585,6 +593,51 @@
   })
   const targets = $derived(pointLayout.posts)
 
+  // The focused conversation's member display-uris (≥2 placed, else null).
+  const focusMembers = $derived.by(() => {
+    if (!focusedThread) return null
+    const c = convos.find((c) => c.id === focusedThread)
+    if (!c) return null
+    const s = new Set(c.members.map((m) => displayNodeOf(m.post.uri)))
+    return s.size >= 2 ? s : null
+  })
+  // Focus lens: chain members take tidy-tree positions — treeTargets ranks a
+  // lone conversation's anchor to 0.5, so the tree assembles centre-frame and
+  // its root is clamped to keep every descendant in bounds. Everyone else keeps
+  // their scatter target and is simply pushed aside by collision; the tree is a
+  // TEMPORARY arrangement of the same nodes, not a different world.
+  const focusTargets = $derived.by<Target[]>(() => {
+    if (!focusMembers) return targets
+    const chainNodes: TreeNode[] = []
+    for (const n of visibleNodes) {
+      if (!focusMembers.has(n.uri)) continue
+      const raw = parentUriOf(n.item)
+      const p = raw ? displayNodeOf(raw) : undefined
+      const a = nodeLayout.get(n.uri) ?? { x: 0.5, y: 0.5, sizeRank: 0.5 }
+      chainNodes.push({
+        uri: n.uri,
+        timestamp: n.timestamp,
+        parent: p && p !== n.uri && focusMembers.has(p) ? p : undefined,
+        x: 0.5,
+        y: 0.5,
+        sizeRank: a.sizeRank,
+      })
+    }
+    if (chainNodes.length < 2) return targets
+    const panelW = showDigest ? Math.min(PANEL_W, w * 0.88) : 0
+    const tree = treeTargets(chainNodes, {
+      padX: PAD_X,
+      padTop: PAD_TOP,
+      innerW: Math.max(0, w - 2 * PAD_X - panelW),
+      innerH: Math.max(0, h - PAD_TOP - Math.max(PAD_BOTTOM, bottomChrome + 8)),
+      minSize: MIN_SIZE,
+      maxSize: MAX_SIZE,
+      pill,
+    })
+    const byId = new Map(tree.map((t) => [t.id, t]))
+    return targets.map((t) => byId.get(t.id) ?? t)
+  })
+
   const nodeByUri = $derived(new Map(visibleNodes.map((n) => [n.uri, n])))
 
   // Placed = target metadata + live simulation position (fallback to target).
@@ -970,9 +1023,12 @@
         return {
           id: e.id,
           from: e.from,
-          // Hovering any member of a conversation brings ITS edges up to full
-          // strength; everything else stays a whisper (see .edges CSS).
-          lit: hoveredChain.size > 1 && (hoveredChain.has(e.from) || hoveredChain.has(e.to)),
+          // Hovering any member of a conversation — or focusing it into the
+          // tree lens — brings ITS edges up to full strength; everything else
+          // stays a whisper (see .edges CSS).
+          lit:
+            (hoveredChain.size > 1 && (hoveredChain.has(e.from) || hoveredChain.has(e.to))) ||
+            (focusMembers !== null && (focusMembers.has(e.from) || focusMembers.has(e.to))),
           color: topicColorByNode.get(e.from) ?? '',
           d: curvePath(
             a.px + ux * (a.size / 2),
@@ -1186,12 +1242,15 @@
   let solvedSig = ''
   let solvedBatch: Set<string> | null = null
   $effect(() => {
-    const t = [...targets, ...topicTargets]
+    const t = [...focusTargets, ...topicTargets]
     layout?.setCollision(pill ? pill.gap : null) // rectangles vs circles
     // POINTS SPIKE: no reservoir bleed — the solver keeps everything inside the
     // frame (targets are already frame-mapped), so nothing lands off-screen.
     layout?.setBounds(w, h, 18, Math.max(24, bottomChrome), 0, 0)
-    const sig = `${w}|${h}|${bottomChrome}|${showDigest ? 1 : 0}|${pill ? pill.w : 0}`
+    // focusedThread is part of the signature: entering/leaving the focus lens
+    // re-solves everything (the gather / the glide home) even though no ids
+    // change — the freeze below would otherwise ignore the retargeting.
+    const sig = `${w}|${h}|${bottomChrome}|${showDigest ? 1 : 0}|${pill ? pill.w : 0}|${focusedThread ?? ''}`
     const ids = new Set(t.map((x) => x.id))
     if (batch !== null && batch === solvedBatch && sig === solvedSig) {
       const hasNew = t.some((x) => !solvedFor.has(x.id))
@@ -1535,6 +1594,7 @@
     if (e.button !== 0) return
     const t = e.target as HTMLElement
     if (t.closest('.wrap, .card, .config-wrap, .hud, .panel, .digest-btn, .topic-node')) return
+    focusedThread = null // background press releases the focus lens
     canvasPointers.set(e.pointerId, canvasXY(e))
     if (canvasPointers.size === 1) startPan()
     else if (canvasPointers.size === 2) startPinch()
@@ -1787,11 +1847,21 @@
       setHovered(node.uri)
       return
     }
-    clickTimer = setTimeout(() => togglePin(node), 220)
+    clickTimer = setTimeout(() => {
+      togglePin(node)
+      focusChain(node.uri)
+    }, 220)
   }
   function onNodeDblClick(node: GraphNode) {
     clearTimeout(clickTimer)
     open(node)
+  }
+
+  // Click a chain member → focus its conversation (the tidy-tree lens); click a
+  // chainless post → release any focus.
+  function focusChain(uri: string) {
+    const c = convos.find((c) => c.members.some((m) => m.post.uri === uri))
+    focusedThread = c && c.members.length > 1 ? c.id : null
   }
 
   function nextBatch() {
@@ -2118,7 +2188,8 @@
       enter={enterFrom(p.px, p.py)}
       hasReplies={(edgeCount.get(p.node.uri) ?? 0) > 0}
       active={hovered === p.node.uri}
-      related={hoveredChain.size > 1 && hovered !== p.node.uri && hoveredChain.has(p.node.uri)}
+      related={hovered !== p.node.uri &&
+        ((hoveredChain.size > 1 && hoveredChain.has(p.node.uri)) || (focusMembers?.has(p.node.uri) ?? false))}
       pinned={pinned.has(p.node.uri)}
       ghost={p.node.ghost ?? false}
       reaction={reactions.reactionOf(p.node.uri)}
