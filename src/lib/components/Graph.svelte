@@ -645,14 +645,16 @@
     if (!focusedThread) return null
     const c = convos.find((c) => c.id === focusedThread)
     if (!c) return null
+    const root = rootUriOf(c.members[0])
     const s = new Set(c.members.map((m) => displayNodeOf(m.post.uri)))
-    // Pull in any on-map node belonging to the SAME fetched thread — above all
-    // GHOSTS of already-dismissed ancestors. Those aren't in `convos` (it's built
-    // from the non-dismissed `visible`), so without this the ghost stays a
-    // scatter node, gets exiled off-frame with everyone else, and leaves its
-    // reply's edge dangling to nowhere (the off-screen line). It belongs IN the
-    // tree, dimmed — the scatter already resurrects it for exactly this reason.
-    if (lensThreadUris.size) for (const n of visibleNodes) if (lensThreadUris.has(n.uri)) s.add(n.uri)
+    // Also every OTHER on-map node in the SAME thread (shared root) — above all
+    // GHOSTS of already-dismissed ancestors, which `convos` omits (it's built
+    // from the non-dismissed `visible`). Without this the ghost stays a scatter
+    // node, gets exiled off-frame, and dangles its reply's edge off-screen.
+    // Root-based, NOT fetch-based, so it holds even when the thread fetch can't
+    // return the dismissed post — deleted/blocked/beyond depth, or a stale root
+    // pointer (the case the earlier fetch-based fix missed).
+    for (const n of visibleNodes) if (rootUriOf(n.item) === root) s.add(displayNodeOf(n.uri))
     return s.size ? s : null
   })
 
@@ -688,9 +690,6 @@
       stale = true
     }
   })
-  // Every uri in the fetched thread — the structural truth the lens draws from
-  // (ancestors and branches your feed dropped, and members you'd dismissed).
-  const lensThreadUris = $derived(new Set(lensGuests.map((i) => i.post.uri)))
   // Guests = fetched thread posts not already on the map (as a node, or covered
   // by a collapsed rep). Posts you'd already DISMISSED come in too, as ghosts —
   // so the tree stays whole (mirrors the scatter's resurrected-ancestor ghosts)
