@@ -155,6 +155,16 @@
     const chrome = 42 /*header*/ + 36 /*actions*/ + 22 /*padding*/
     return Math.round(Math.min(READER_MAX_H, Math.max(96, chrome + lines * 18 + embed)))
   }
+  // MEASURE PASS: each lens card is auto-height and reports its true rendered
+  // height here; the packer uses the measurement (falling back to the estimate
+  // for the first frame), so a card is exactly as tall as its content — no
+  // fixed-estimate empty space below it. Height is width-determined and doesn't
+  // depend on position, so the measure → repack loop settles in a frame.
+  const measuredHeights = new SvelteMap<string, number>()
+  function measureCard(uri: string, h: number) {
+    if (h > 0 && measuredHeights.get(uri) !== h) measuredHeights.set(uri, h)
+  }
+  const measuredSig = $derived([...measuredHeights.values()].reduce((a, b) => a + b, 0))
   /**
    * The reservoir: how far the world extends past each edge of the frame, and
    * how many extra posts that buys. A ring roughly one pill deep holds about
@@ -811,7 +821,8 @@
         y: 0.5,
         // Guests aren't in the batch baseline; a modest fixed rank sizes them.
         sizeRank: nodeLayout.get(n.uri)?.sizeRank ?? 0.35,
-        height: readerCardHeight(n.item), // variable card height, packed by treeTargets
+        // Measured card height when known, else the estimate for the first frame.
+        height: measuredHeights.get(n.uri) ?? readerCardHeight(n.item),
       })
     }
     for (const uri of kept) {
@@ -1434,8 +1445,6 @@
 
   // A card is shown for the hovered post and for every pinned post (so a pinned
   // post stays readable, not just its avatar). Deduped by uri.
-  // A post carries an embed the reader card can't inline (image/video/quote/link).
-  const postHasEmbed = (n: GraphNode) => !!n.item.post.embed
   const cards = $derived.by(() => {
     const uris = new Set<string>(pinned)
     if (hovered) uris.add(hovered)
@@ -1443,10 +1452,9 @@
     for (const uri of uris) {
       const p = placedByUri.get(uri)
       if (!p) continue
-      // In the reader lens a pure-text member/guest is already fully legible in
-      // its card — don't stack a hover PostCard over it. Pinned posts, and posts
-      // with an un-inlined embed (the flagged ones), still pop on hover.
-      if (lensUris?.has(uri) && !pinned.has(uri) && !postHasEmbed(p.node)) continue
+      // A lens card IS already a full PostCard — don't pop another over it on
+      // hover. (Pinned posts, e.g. from the digest panel, still pop.)
+      if (lensUris?.has(uri) && !pinned.has(uri)) continue
       const { x, y } = cardPos(p)
       out.push({ node: p.node, x, y })
     }
@@ -1637,7 +1645,7 @@
     // leaving the lens — and guests arriving after the fetch, or leaving when
     // dismissed — re-solve everything (the whole tree re-lays around them) even
     // though the freeze would otherwise ignore retargeting/newcomers.
-    const sig = `${w}|${h}|${bottomChrome}|${showDigest ? 1 : 0}|${pill ? pill.w : 0}|${focusedThread ?? ''}|g${guestNodes.length}|x${lensExpandTotal}`
+    const sig = `${w}|${h}|${bottomChrome}|${showDigest ? 1 : 0}|${pill ? pill.w : 0}|${focusedThread ?? ''}|g${guestNodes.length}|x${lensExpandTotal}|m${measuredSig}`
     const ids = new Set(t.map((x) => x.id))
     if (batch !== null && batch === solvedBatch && sig === solvedSig) {
       const hasNew = t.some((x) => !solvedFor.has(x.id))
@@ -2686,6 +2694,7 @@
       onreply={(it) => compose.openReply(it)}
       onquote={(it) => compose.openQuote(it)}
       onrate={rateOnly}
+      onmeasure={measureCard}
     />
   {/each}
 

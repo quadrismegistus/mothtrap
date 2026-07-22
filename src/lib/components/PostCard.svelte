@@ -751,9 +751,9 @@
     position: relative;
     z-index: auto;
     width: 100%;
-    height: 100%;
+    height: auto; /* size to content (measured back for the packer); scroll past the cap */
     max-width: none;
-    max-height: none;
+    max-height: 340px; /* keep in step with READER_MAX_H in Graph */
     box-shadow: none;
     border-radius: 14px;
     padding: 0.5rem 0.6rem;

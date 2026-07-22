@@ -44,6 +44,9 @@
     ondismiss: (uri: string) => void
     ondragmove: (uri: string, clientX: number, clientY: number) => void
     ondragend: (uri: string) => void
+    /** Reader lens: report the card's true rendered height so the packer can
+     * size the node to its content (no fixed-estimate empty space below it). */
+    onmeasure?: (uri: string, height: number) => void
     /** Reader-lens inline actions: the card IS the read surface, so its action
      * row (reply/repost/like/⋯ + private vote) lives on it rather than on a
      * popped card. */
@@ -78,7 +81,15 @@
     onreply,
     onquote,
     onrate,
+    onmeasure,
   }: Props = $props()
+
+  // Reader lens: the card is auto-height, so report its rendered height back so
+  // the tree packer can reserve exactly that (see Graph's measuredHeights).
+  let measuredH = $state(0)
+  $effect(() => {
+    if (reader && measuredH > 0) onmeasure?.(node.uri, measuredH)
+  })
 
   // Held at the entry offset for one frame, then released so CSS carries it
   // home. Two rAFs: one to let the offset paint, one to change it -- a single
@@ -187,8 +198,9 @@
   class:ghost
   class:unfollowed
   class:thread={node.isThreadRoot}
-  style="left: {px}px; top: {py}px; width: {reader ? reader.w : pill ? pill.w : size}px; height: {reader ? reader.h : pill ? pill.h : size}px; --ex: {enter?.x ?? 0}px; --ey: {enter?.y ?? 0}px;{accent ? ` --accent-topic: ${accent};` : ''}"
+  style="left: {px}px; top: {py}px; width: {reader ? reader.w : pill ? pill.w : size}px; height: {reader ? 'auto' : (pill ? pill.h : size) + 'px'}; --ex: {enter?.x ?? 0}px; --ey: {enter?.y ?? 0}px;{accent ? ` --accent-topic: ${accent};` : ''}"
   role="group"
+  bind:clientHeight={measuredH}
   onpointerenter={(e) => e.pointerType === 'mouse' && onhover(node.uri)}
   onpointerleave={(e) => e.pointerType === 'mouse' && onhover(null)}
   onpointerdown={onPointerDown}
