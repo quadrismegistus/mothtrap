@@ -19,8 +19,23 @@
     onreply: (item: FeedItem) => void
     onquote: (item: FeedItem) => void
     onvote?: (item: FeedItem, kind: 'up' | 'down') => void
+    /** The ⋯ menu is FIXED-positioned by default (right for a card that renders
+     * in screen space and clips its own overflow). Set false when this row lives
+     * inside a CSS `transform` (the graph's pan/zoom layer), where `fixed` is
+     * positioned relative to the transformed ancestor, not the screen — there,
+     * an absolute menu (like the repost one) lands correctly. */
+    menuFixed?: boolean
   }
-  let { item, compact = false, showVotes = false, vote, onreply, onquote, onvote }: Props = $props()
+  let {
+    item,
+    compact = false,
+    showVotes = false,
+    vote,
+    onreply,
+    onquote,
+    onvote,
+    menuFixed = true,
+  }: Props = $props()
 
   const liked = $derived(interactions.liked(item))
   const reposted = $derived(interactions.reposted(item))
@@ -46,8 +61,10 @@
       moreMenu = false
       return
     }
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-    moreAnchor = { left: r.left + r.width / 2, top: r.top, bottom: r.bottom }
+    if (menuFixed) {
+      const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+      moreAnchor = { left: r.left + r.width / 2, top: r.top, bottom: r.bottom }
+    }
     moreMenu = true
   }
   let modError = $state<string | undefined>(undefined)
@@ -120,36 +137,20 @@
   <div class="more-wrap">
     <button class="act more" title="Report, mute or block" aria-label="More actions" onclick={toggleMore}>⋯</button>
     {#if moreMenu}
-      <div
-        class="menu floating"
-        class:up={moreMenuUp}
-        bind:clientHeight={moreMenuH}
-        style="left: {moreMenuPos.left}px; top: {moreMenuPos.top}px;"
-      >
-        <button
-          onclick={() => {
-            report.show(item)
-            moreMenu = false
-          }}>Report post</button
+      {#if menuFixed}
+        <div
+          class="menu floating"
+          class:up={moreMenuUp}
+          bind:clientHeight={moreMenuH}
+          style="left: {moreMenuPos.left}px; top: {moreMenuPos.top}px;"
         >
-        {#if !isSelf}
-          <button onclick={() => runModAction(() => (muted ? moderation.unmute(item.post.author) : moderation.mute(item.post.author)))}>
-            {muted ? 'Unmute' : 'Mute'} @{item.post.author.handle}
-          </button>
-          <button
-            class="danger"
-            onclick={() => runModAction(() => (blocked ? moderation.unblock(item.post.author) : moderation.block(item.post.author)))}
-          >
-            {blocked ? 'Unblock' : 'Block'} @{item.post.author.handle}
-          </button>
-          <button
-            onclick={() => {
-              report.show(item, 'account')
-              moreMenu = false
-            }}>Report account</button
-          >
-        {/if}
-      </div>
+          {@render moreItems()}
+        </div>
+      {:else}
+        <!-- Inside the graph transform: absolute, opening upward like the repost
+             menu, so it lands on the button rather than 100s of px off. -->
+        <div class="menu">{@render moreItems()}</div>
+      {/if}
     {/if}
   </div>
 
@@ -176,6 +177,32 @@
 </div>
 
 {#if modError && !compact}<p class="mod-error">{modError}</p>{/if}
+
+{#snippet moreItems()}
+  <button
+    onclick={() => {
+      report.show(item)
+      moreMenu = false
+    }}>Report post</button
+  >
+  {#if !isSelf}
+    <button onclick={() => runModAction(() => (muted ? moderation.unmute(item.post.author) : moderation.mute(item.post.author)))}>
+      {muted ? 'Unmute' : 'Mute'} @{item.post.author.handle}
+    </button>
+    <button
+      class="danger"
+      onclick={() => runModAction(() => (blocked ? moderation.unblock(item.post.author) : moderation.block(item.post.author)))}
+    >
+      {blocked ? 'Unblock' : 'Block'} @{item.post.author.handle}
+    </button>
+    <button
+      onclick={() => {
+        report.show(item, 'account')
+        moreMenu = false
+      }}>Report account</button
+    >
+  {/if}
+{/snippet}
 
 <style>
   .actions {

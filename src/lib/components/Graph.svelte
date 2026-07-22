@@ -128,7 +128,7 @@
   const readerPill = $derived({
     // Narrower than a "one-line-per-post" card: text wraps to more lines, so a
     // card reads a bit taller and less wide (a calmer column in the tree).
-    w: Math.round(Math.min(288, Math.max(208, w - 40))),
+    w: Math.round(Math.min(300, Math.max(212, w - 40))),
     h: READER_H,
     gap: { x: 22, y: 18 },
   })
@@ -138,12 +138,12 @@
   // plus hard newlines, capped at the 300-char / 10-line ceiling, plus chrome
   // (name row, padding, an embed-flag row). Errs slightly tall so text isn't
   // clipped. READER_LINE_H tracks .wrap.reader .text (0.75rem × 1.32).
-  const READER_LINE_H = 16
+  const READER_LINE_H = 17
   function readerCardHeight(item: FeedItem): number {
     const rec = item.post.record
     const text = AppBskyFeedPost.isRecord(rec) ? rec.text.trim() : ''
     const textW = readerPill.w - 30 - 8 - 22 // minus avatar, gap, padding
-    const cpl = Math.max(10, Math.floor(textW / 6.9)) // ~chars per line at 0.75rem
+    const cpl = Math.max(10, Math.floor(textW / 7.2)) // ~chars per line at 0.8rem
     let lines = 0
     for (const para of (text || ' ').split('\n')) lines += Math.max(1, Math.ceil(para.length / cpl))
     lines = Math.min(lines, 10) // matches the CSS clamp / a full 300-char post
@@ -824,6 +824,12 @@
       padTop: PAD_TOP,
       innerW: Math.max(0, w - 2 * PAD_X - panelW),
       innerH: Math.max(0, h - PAD_TOP - Math.max(PAD_BOTTOM, bottomChrome + 8)),
+      // Don't wrap sibling fans to the frame — the lens PANS, and siblings are
+      // already capped at 3, so wide cards on a narrow frame shouldn't stack a
+      // 2-reply fan into a diagonal column. A huge frame budget = no wrapping;
+      // siblings stay on one row, the tree reads as a tree.
+      frameW: 1e6,
+      frameH: 1e6,
       minSize: MIN_SIZE,
       maxSize: MAX_SIZE,
       pill: readerPill, // lens nodes are reader cards, so pack for THAT footprint
@@ -2104,8 +2110,31 @@
     undoLast = null
   }
 
+  // In the thread lens, dismissing ANY post dismisses the WHOLE thread — you've
+  // read the conversation and you're done with it, not just one branch. Covers
+  // every candidate (members + guests + their subtrees), arms one undo, and
+  // closes the lens.
+  function dismissThread(): string[] {
+    const pack = lensPack
+    if (!pack) return []
+    const all = new Set<string>()
+    for (const uri of pack.cand.keys()) {
+      all.add(uri)
+      for (const d of threadDescendants(allItems, uri)) all.add(d)
+    }
+    const added = [...all].filter((u) => !read.isDismissed(u))
+    read.dismissMany([...all])
+    if (hovered && all.has(hovered)) hovered = null
+    if (added.length) armUndo({ kind: 'dismiss', uris: added })
+    focusedThread = null
+    focusedPost = null
+    return added
+  }
+
   // Returns the URIs this call actually newly-dismissed (for undo capture).
   function dismiss(uri: string): string[] {
+    // In the lens, any dismiss takes the whole thread (see dismissThread).
+    if (focusedThread && lensKeptUris.has(uri)) return dismissThread()
     // Dismiss the post and every reply hanging off it — "I'm done with this
     // thread". (With chains always drawn, single-post dismissal would just
     // ghost the node in place, since its own replies keep it needed — d would
@@ -2279,6 +2308,13 @@
   // rate, dismiss, and hand the selection to the next survivor so the sweep flows
   // post→post without reaching for the mouse.
   function rateAndAdvance(uri: string, kind: ReactionKind) {
+    // In the reader lens, rating MARKS only (like the inline arrows) — it doesn't
+    // dismiss, which here would take the whole thread out from under you as you
+    // read it. Only an explicit dismiss (d / ✕) closes the thread.
+    if (focusedThread && lensKeptUris.has(uri)) {
+      rateOnly(uri, kind)
+      return
+    }
     const next = nextSurvivor(uri)
     react(uri, kind)
     if (next) keyboardSelect(next)

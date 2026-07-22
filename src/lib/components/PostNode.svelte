@@ -298,6 +298,7 @@
         item={node.item}
         showVotes
         vote={reaction}
+        menuFixed={false}
         onreply={(it) => onreply?.(it)}
         onquote={(it) => onquote?.(it)}
         onvote={(it, kind) => onrate?.(it.post.uri, kind)}
@@ -576,10 +577,10 @@
     overflow: hidden;
   }
   .wrap.reader .who {
-    font-size: 0.66rem;
+    font-size: 0.7rem;
   }
   .wrap.reader .text {
-    font-size: 0.75rem;
+    font-size: 0.8rem;
     line-height: 1.32;
     /* High enough that a full 300-char post fits at this card width rather than
        truncating; the fixed box height is the real bound. */
