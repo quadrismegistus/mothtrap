@@ -112,6 +112,18 @@
         { w: Math.round(Math.min(212, Math.max(148, w - 32))), h: PILL_H, gap: PILL_GAP }
       : undefined,
   )
+  // READER LENS (spike within the spike): inside the focus lens every tree
+  // member renders as a FULL-TEXT reader card — you read the whole thread
+  // without hovering. Wider and taller than a scatter pill (room for the text),
+  // clamped to the frame so it still fits a phone. Media/quote posts can't be
+  // read inline, so PostNode flags them and their hover-card still pops. This is
+  // the lens's own node size, independent of the scatter's avatar/pill choice.
+  const READER_H = 132
+  const readerPill = $derived({
+    w: Math.round(Math.min(324, Math.max(212, w - 40))),
+    h: READER_H,
+    gap: { x: 26, y: 20 },
+  })
   /**
    * The reservoir: how far the world extends past each edge of the frame, and
    * how many extra posts that buys. A ring roughly one pill deep holds about
@@ -710,7 +722,7 @@
       innerH: Math.max(0, h - PAD_TOP - Math.max(PAD_BOTTOM, bottomChrome + 8)),
       minSize: MIN_SIZE,
       maxSize: MAX_SIZE,
-      pill,
+      pill: readerPill, // lens nodes are reader cards, so pack for THAT footprint
     })
     // Classic tree presentation: ROOT AT TOP-CENTRE. treeTargets' anchor math
     // is built for a tree coexisting with a scatter; the lens owns the whole
@@ -1219,6 +1231,8 @@
 
   // A card is shown for the hovered post and for every pinned post (so a pinned
   // post stays readable, not just its avatar). Deduped by uri.
+  // A post carries an embed the reader card can't inline (image/video/quote/link).
+  const postHasEmbed = (n: GraphNode) => !!n.item.post.embed
   const cards = $derived.by(() => {
     const uris = new Set<string>(pinned)
     if (hovered) uris.add(hovered)
@@ -1226,6 +1240,10 @@
     for (const uri of uris) {
       const p = placedByUri.get(uri)
       if (!p) continue
+      // In the reader lens a pure-text member/guest is already fully legible in
+      // its card — don't stack a hover PostCard over it. Pinned posts, and posts
+      // with an un-inlined embed (the flagged ones), still pop on hover.
+      if (lensUris?.has(uri) && !pinned.has(uri) && !postHasEmbed(p.node)) continue
       const { x, y } = cardPos(p)
       out.push({ node: p.node, x, y })
     }
@@ -1403,7 +1421,9 @@
   let solvedBatch: Set<string> | null = null
   $effect(() => {
     const t = [...focusTargets, ...topicTargets]
-    layout?.setCollision(pill ? pill.gap : null) // rectangles vs circles
+    // Lens open → the reader cards need their own (larger) spacing; else the
+    // scatter's gap (pill mode) or circle collision (avatar mode).
+    layout?.setCollision(lensTree ? readerPill.gap : pill ? pill.gap : null)
     // POINTS SPIKE: no reservoir bleed — the solver keeps everything inside the
     // frame (targets are already frame-mapped), so nothing lands off-screen.
     // EXCEPT while the lens is open: a huge bleed legalizes the exile ring so
@@ -2372,6 +2392,7 @@
       py={p.py}
       size={p.size}
       {pill}
+      reader={lensUris?.has(p.node.uri) ? readerPill : undefined}
       arriving={arriving.has(p.node.uri)}
       enter={enterFrom(p.px, p.py)}
       hasReplies={(edgeCount.get(p.node.uri) ?? 0) > 0}

@@ -13,6 +13,10 @@
     /** Pill mode: render avatar + the opening line of the post, at this fixed
      * w x h, instead of a bare avatar circle. */
     pill?: { w: number; h: number }
+    /** Reader mode (focus lens): render the FULL post text in a card of this
+     * w x h, so a thread reads without hovering. Overrides `pill` for size and
+     * layout; media/quote get a flag chip that invites a hover for the embed. */
+    reader?: { w: number; h: number }
     /** Newly on screen: animate it in from `enter` rather than appearing. */
     arriving?: boolean
     /** Offset to enter FROM, in container px. */
@@ -45,6 +49,7 @@
     py,
     size,
     pill,
+    reader,
     arriving = false,
     enter,
     hasReplies,
@@ -93,6 +98,27 @@
     const text = AppBskyFeedPost.isRecord(rec) ? rec.text.trim() : ''
     return text.length > 160 ? text.slice(0, 160) + '…' : text
   })
+  // Reader mode wants the whole post (Bluesky caps at 300); CSS line-clamps and
+  // fades where a long one overruns the card, hinting "hover for the rest".
+  const fullText = $derived.by(() => {
+    const rec = node.item.post.record
+    return AppBskyFeedPost.isRecord(rec) ? rec.text.trim() : ''
+  })
+  // What the reader card can't show inline — flagged so the reader knows to hover.
+  // Matches the embed VIEW $type (recordWithMedia counts as a quote).
+  const embedFlag = $derived.by(() => {
+    const t = (node.item.post.embed as { $type?: string } | undefined)?.$type
+    if (!t) return null
+    return {
+      image: t.includes('images'),
+      video: t.includes('video'),
+      quote: t.includes('record'),
+      link: t.includes('external'),
+    }
+  })
+  const hasEmbedFlag = $derived(
+    !!embedFlag && (embedFlag.image || embedFlag.video || embedFlag.quote || embedFlag.link),
+  )
   const repost = $derived(reposterProfile(node.item))
   // A node is too small to explain itself: it only signals "covered". The
   // reason and the way in live on the card, which has room for both.
@@ -156,7 +182,8 @@
 
 <div
   class="wrap"
-  class:pill={!!pill}
+  class:pill={!!pill || !!reader}
+  class:reader={!!reader}
   class:arriving
   class:entering={arriving && !landed}
   class:active
@@ -165,7 +192,7 @@
   class:ghost
   class:unfollowed
   class:thread={node.isThreadRoot}
-  style="left: {px}px; top: {py}px; width: {pill ? pill.w : size}px; height: {pill ? pill.h : size}px; --ex: {enter?.x ?? 0}px; --ey: {enter?.y ?? 0}px;{accent ? ` --accent-topic: ${accent};` : ''}"
+  style="left: {px}px; top: {py}px; width: {reader ? reader.w : pill ? pill.w : size}px; height: {reader ? reader.h : pill ? pill.h : size}px; --ex: {enter?.x ?? 0}px; --ey: {enter?.y ?? 0}px;{accent ? ` --accent-topic: ${accent};` : ''}"
   role="group"
   onpointerenter={(e) => e.pointerType === 'mouse' && onhover(node.uri)}
   onpointerleave={(e) => e.pointerType === 'mouse' && onhover(null)}
@@ -199,12 +226,21 @@
         <span class="cover-mark" title={cover.reason} aria-hidden="true">⚠</span>
       {/if}
     </span>
-    {#if pill}
+    {#if pill || reader}
       <span class="say">
         <span class="who">{authorName(node.item)}</span>
         <!-- Covered posts stay covered here too: the pill would otherwise print
-             in plain text exactly what the blurred avatar is hiding. -->
-        <span class="text">{cover.blur ? cover.reason : preview}</span>
+             in plain text exactly what the blurred avatar is hiding. Reader mode
+             shows the whole post; pill mode the opening line. -->
+        <span class="text">{cover.blur ? cover.reason : reader ? fullText : preview}</span>
+        {#if reader && !cover.blur && hasEmbedFlag && embedFlag}
+          <span class="flags" aria-hidden="true">
+            {#if embedFlag.image}<span class="flag">🖼 image</span>{/if}
+            {#if embedFlag.video}<span class="flag">🎬 video</span>{/if}
+            {#if embedFlag.quote}<span class="flag">❝ quote</span>{/if}
+            {#if embedFlag.link}<span class="flag">🔗 link</span>{/if}
+          </span>
+        {/if}
       </span>
     {/if}
   </button>
@@ -453,6 +489,53 @@
     line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
+  }
+
+  /* ---- Reader lens ------------------------------------------------------
+     Inside the focus lens each node is a full-text card: read the thread
+     without hovering. Rectangular (not a capsule), avatar top-left, text
+     filling the box and clamping where a rare long post overruns. These rules
+     follow .wrap.pill (equal specificity) so they win on source order. */
+  .wrap.reader .node {
+    align-items: flex-start;
+    gap: 8px;
+    padding: 9px 11px;
+    border-radius: 14px;
+  }
+  .wrap.reader .face {
+    flex: 0 0 30px;
+    width: 30px;
+    height: 30px;
+    margin-top: 1px;
+  }
+  .wrap.reader .say {
+    gap: 2px;
+    overflow: hidden;
+  }
+  .wrap.reader .who {
+    font-size: 0.66rem;
+  }
+  .wrap.reader .text {
+    font-size: 0.75rem;
+    line-height: 1.32;
+    -webkit-line-clamp: 5;
+    line-clamp: 5;
+  }
+  .wrap.reader .flags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 3px;
+  }
+  .wrap.reader .flag {
+    font-size: 0.56rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0 6px;
+    white-space: nowrap;
   }
 
   .node {
