@@ -757,7 +757,8 @@
     box-shadow: none;
     border-radius: 14px;
     padding: 0.5rem 0.6rem;
-    touch-action: none; /* the graph pans; the card doesn't swipe in node mode */
+    touch-action: pan-y; /* vertical touch scrolls a tall/overflowing card; the
+      graph pans elsewhere. (Swipe is already off in node mode via onCardPointerDown.) */
   }
   .card.node .text {
     font-size: 0.82rem;

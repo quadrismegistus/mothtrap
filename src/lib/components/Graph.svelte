@@ -164,7 +164,10 @@
   function measureCard(uri: string, h: number) {
     if (h > 0 && measuredHeights.get(uri) !== h) measuredHeights.set(uri, h)
   }
-  const measuredSig = $derived([...measuredHeights.values()].reduce((a, b) => a + b, 0))
+  // A rolling hash, NOT a sum: two cards changing height by canceling deltas in
+  // the same flush would leave a sum unchanged, so the solve would freeze on
+  // stale positions. Order-sensitive so any per-card change moves the signature.
+  const measuredSig = $derived([...measuredHeights.values()].reduce((a, b) => (a * 31 + b) | 0, 0))
   /**
    * The reservoir: how far the world extends past each edge of the frame, and
    * how many extra posts that buys. A ring roughly one pill deep holds about
@@ -724,10 +727,11 @@
     if (!m) return
     const root = rootUriOf(m)
     const cached = lensCache.get(root)
-    if (cached) {
-      lensGuests = cached
-      return
-    }
+    // Clear the PREVIOUS thread's guests immediately (seed from cache if we have
+    // this root). Otherwise, switching lens A→B while B's fetch is in flight left
+    // lensGuests holding A's siblings, which lensPack lays out as orphan roots.
+    lensGuests = cached ?? []
+    if (cached) return
     let stale = false
     fetchThread(root)
       .then((items) => {
@@ -2106,33 +2110,13 @@
     layout?.dragEnd(uri)
   }
 
-  // Expansion is keyed by the clicked post's own uri (stable as the group grows);
-  // buildGraph expands a conversation if any of its members' uri is in `expanded`.
-  // The fetch is scoped to the clicked post (its replies + its ancestor chain),
-  // not the whole root thread, so mapping stays about the post you clicked.
-  function toggleMapReplies(item: FeedItem) {
-    const uri = item.post.uri
-    if (expanded.has(uri)) {
-      expanded.delete(uri)
-      pinned.delete(uri) // release the anchor on un-map
-    } else {
-      expanded.add(uri)
-      // Anchor the newly-full conversation at the clicked post's CURRENT spot,
-      // exactly as revealing a topic pill does (pinned → #anchorHeldGroups shifts
-      // the whole tree's targets around it). Without this, the conversation lays
-      // its tidy-tree at its SEMANTIC position and flings the chain away from the
-      // click (#65). Un-map releases the pin.
-      pinned.add(uri)
-      threads.ensure(uri) // pull replies not already in the timeline
-    }
-  }
+  // Reader-lens era: "View thread" and the +N badge both OPEN THE LENS (see
+  // onexpand / onmapreplies → focusChain). The old inline-expand path added the
+  // clicked uri to `expanded`, but the one-hop scatter filter now strips the
+  // revealed replies straight back out (they're children, and the filter only
+  // keeps a post + its immediate parent) — so it revealed nothing. Gone.
   function repliesMapped(item: FeedItem): boolean {
-    // Must mirror toggleMapReplies' own condition (expanded.has), or the button
-    // LABEL and its ACTION disagree. Reading the graph node's `expanded` flag was
-    // the bug: buildGraph sets it true for planner-selected 'full' posts the user
-    // never mapped, so the button read "Hide replies" while clicking it SHOWED
-    // them (the click hit the `else`/add branch). (#52)
-    return expanded.has(item.post.uri)
+    return expanded.has(item.post.uri) // still set by topic-pill reveal
   }
 
   // Why a post is in the graph, shown on its card. Pulled-in context always
@@ -2510,10 +2494,17 @@
     if (ptr.x < 0 || !graphEl) return false
     // Scoped to THIS graph. Matching '.card' against the whole document also
     // matched the login card, so after a session expiry the timer kept finding
-    // one and re-arming against a component that no longer exists.
+    // one and re-arming against a component that no longer exists. The profile /
+    // ⋯ popovers are the exception: they're PORTALED to <body> (outside graphEl)
+    // so `fixed` escapes the pan/zoom transform — reaching onto one must still
+    // keep the card alive, so match them ungated by graphEl.
     return document
       .elementsFromPoint(ptr.x, ptr.y)
-      .some((el) => graphEl.contains(el) && el.closest('.wrap, .card, .profile-pop'))
+      .some(
+        (el) =>
+          (graphEl.contains(el) && el.closest('.wrap, .card')) ||
+          el.closest('.profile-pop, .menu.floating'),
+      )
   }
   function scheduleClear() {
     clearTimeout(clearTimer)
@@ -2708,7 +2699,7 @@
       onhover={pointerHover}
       onclick={onNodeClick}
       ondblclick={onNodeDblClick}
-      onexpand={(n) => toggleMapReplies(n.item)}
+      onexpand={(n) => focusChain(n.uri)}
       ondismiss={dismiss}
       ondragmove={onNodeDrag}
       ondragend={onNodeDragEnd}

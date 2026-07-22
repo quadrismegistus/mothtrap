@@ -541,8 +541,11 @@ export function treeTargets(nodes: TreeNode[], box: TreeLayoutBox): TreeTarget[]
   // wrapping propagates upward: a wrapped fan takes less horizontal room, and
   // its grandparent spreads its own children accordingly.
   // A slim node (a "+K more" marker) reserves a fraction of a column, so it
-  // doesn't strand itself in a full card-width of empty space.
+  // doesn't strand itself in a full card-width of empty space. SLIM_HW is its
+  // collision half-width — it must match the fraction, or the solver keeps a
+  // full card gap around a ~92px pill and shoves its siblings out of the block.
   const SLIM_W = 0.35
+  const SLIM_HW = 46
   const widths = new Map<string, number>()
   const widthOf = (uri: string, guard: Set<string>): number => {
     const memo = widths.get(uri)
@@ -648,7 +651,6 @@ export function treeTargets(nodes: TreeNode[], box: TreeLayoutBox): TreeTarget[]
   // (not level-based) so it copes with the variable card heights.
   if (box.compact) {
     const CARD_HW = (pill ? pill.w : maxSize) / 2
-    const SLIM_HW = 46 // a "+K more" marker's half-width
     const SEP = pill ? pill.gap.x : 18 // min horizontal gap between subtrees
     const halfW = (uri: string) => (byUri.get(uri)?.slim ? SLIM_HW : CARD_HW)
     type Box = { x: number; y: number; hw: number; hh: number }
@@ -777,7 +779,9 @@ export function treeTargets(nodes: TreeNode[], box: TreeLayoutBox): TreeTarget[]
       tx: rootX + o.dx,
       ty: rootY + o.dy,
       r: (minSize + n.sizeRank * (maxSize - minSize)) / 2, // size stays the node's own
-      ...(pill ? { hw: pill.w / 2, hh: hOf(n.uri) / 2, group: rootUri } : {}),
+      ...(pill
+        ? { hw: byUri.get(n.uri)?.slim ? SLIM_HW : pill.w / 2, hh: hOf(n.uri) / 2, group: rootUri }
+        : {}),
     }
   })
 }
