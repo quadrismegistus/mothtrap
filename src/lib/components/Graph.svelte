@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getFeedPage, type FeedItem } from '../api/timeline'
   import { fetchThread } from '../api/thread'
+  import { AppBskyFeedPost } from '@atproto/api'
   import { feeds } from '../state/feeds.svelte'
   import { bskyUrl, reposter, reposterProfile } from '../api/post'
   import {
@@ -129,6 +130,24 @@
     h: READER_H,
     gap: { x: 24, y: 18 },
   })
+  // VARIABLE height: estimate a reader card's height from its text so the packer
+  // can give a short reply a short card and a full post a tall one. A cheap
+  // synchronous estimate (no DOM measure pass) — line count from the text width
+  // plus hard newlines, capped at the 300-char / 10-line ceiling, plus chrome
+  // (name row, padding, an embed-flag row). Errs slightly tall so text isn't
+  // clipped. READER_LINE_H tracks .wrap.reader .text (0.75rem × 1.32).
+  const READER_LINE_H = 16
+  function readerCardHeight(item: FeedItem): number {
+    const rec = item.post.record
+    const text = AppBskyFeedPost.isRecord(rec) ? rec.text.trim() : ''
+    const textW = readerPill.w - 30 - 8 - 22 // minus avatar, gap, padding
+    const cpl = Math.max(10, Math.floor(textW / 6.9)) // ~chars per line at 0.75rem
+    let lines = 0
+    for (const para of (text || ' ').split('\n')) lines += Math.max(1, Math.ceil(para.length / cpl))
+    lines = Math.min(lines, 10) // matches the CSS clamp / a full 300-char post
+    const chrome = 14 /*name*/ + 6 /*gaps*/ + 18 /*padding*/ + (item.post.embed ? 18 : 0)
+    return Math.round(Math.max(52, chrome + lines * READER_LINE_H))
+  }
   /**
    * The reservoir: how far the world extends past each edge of the frame, and
    * how many extra posts that buys. A ring roughly one pill deep holds about
@@ -714,6 +733,7 @@
         y: 0.5,
         // Guests aren't in the batch baseline; a modest fixed rank sizes them.
         sizeRank: nodeLayout.get(n.uri)?.sizeRank ?? 0.35,
+        height: readerCardHeight(n.item), // variable card height, packed by treeTargets
       })
     }
     for (const n of visibleNodes) if (focusMembers.has(n.uri)) push(n)
@@ -736,14 +756,16 @@
     // untouched.)
     let minX = Infinity
     let maxX = -Infinity
-    let minY = Infinity
+    let minTop = Infinity
     for (const t of tree) {
       minX = Math.min(minX, t.tx)
       maxX = Math.max(maxX, t.tx)
-      minY = Math.min(minY, t.ty)
+      // Top EDGE, not centre: a tall reader card as the root would otherwise
+      // clip under the top bar (its centre sits low but its top rides high).
+      minTop = Math.min(minTop, t.ty - (t.hh ?? t.r))
     }
     const dx = PAD_X + Math.max(0, w - 2 * PAD_X - panelW) / 2 - (minX + maxX) / 2
-    const dy = PAD_TOP + 28 - minY
+    const dy = PAD_TOP + 20 - minTop
     return new Map(tree.map((t) => [t.id, { ...t, tx: t.tx + dx, ty: t.ty + dy }]))
   })
   const focusTargets = $derived.by<Target[]>(() => {
@@ -769,6 +791,15 @@
   })
 
   const nodeByUri = $derived(new Map(visibleNodes.map((n) => [n.uri, n])))
+  // Per-node reader card size, read back from the packed tree (its hh is the
+  // node's variable half-height). Non-lens nodes aren't here, so the reader prop
+  // stays undefined and they render as scatter avatars/pills.
+  const readerBoxByUri = $derived.by(() => {
+    const m = new Map<string, { w: number; h: number }>()
+    if (!lensTree) return m
+    for (const [uri, t] of lensTree) m.set(uri, { w: readerPill.w, h: (t.hh ?? READER_H / 2) * 2 })
+    return m
+  })
 
   // Placed = target metadata + live simulation position (fallback to target).
   const placed = $derived.by(() => {
@@ -2397,7 +2428,7 @@
       py={p.py}
       size={p.size}
       {pill}
-      reader={lensUris?.has(p.node.uri) ? readerPill : undefined}
+      reader={readerBoxByUri.get(p.node.uri)}
       arriving={arriving.has(p.node.uri)}
       enter={enterFrom(p.px, p.py)}
       hasReplies={(edgeCount.get(p.node.uri) ?? 0) > 0}

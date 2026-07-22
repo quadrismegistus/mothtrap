@@ -390,6 +390,10 @@ export interface TreeNode {
   x: number
   y: number
   sizeRank: number
+  /** Optional per-node card height in px (reader lens). When set, rows stack by
+   * real pixel span so cards can vary in height; when absent every node is the
+   * uniform pill.h / maxSize and the layout is exactly as before. */
+  height?: number
 }
 export interface TreeLayoutBox {
   padX: number
@@ -455,6 +459,13 @@ export function treeTargets(nodes: TreeNode[], box: TreeLayoutBox): TreeTarget[]
       else childrenOf.set(p, [n])
     }
   }
+
+  // A node's own card height, and the vertical gap between stacked cards. When a
+  // node carries no explicit height it's the uniform footprint (pill.h or an
+  // avatar's maxSize), so hOf-based stacking below reproduces the old Y_UNIT
+  // layout exactly; a reader-lens node supplies its text-sized height instead.
+  const GAP_Y = pill ? pill.gap.y : 30
+  const hOf = (uri: string) => byUri.get(uri)?.height ?? (pill ? pill.h : maxSize)
 
   // How many columns a sibling fan may span before wrapping. A fan of nine
   // laid out as ONE row spans ~2200px in pill mode — wider than any frame —
@@ -555,6 +566,25 @@ export function treeTargets(nodes: TreeNode[], box: TreeLayoutBox): TreeTarget[]
     return h
   }
 
+  // Subtree vertical span in PIXELS: from a node's centre down to the bottom
+  // edge of the deepest card beneath it. This is what stacks rows without
+  // overlap when cards vary in height (heightOf, above, is the row-count twin
+  // used only for the wrap budget). With uniform heights it equals the old
+  // heightOf * Y_UNIT progression exactly.
+  const spans = new Map<string, number>()
+  const spanDown = (uri: string): number => {
+    const memo = spans.get(uri)
+    if (memo !== undefined) return memo
+    spans.set(uri, hOf(uri) / 2) // cycle guard: temporary value while recursing
+    let down = hOf(uri) / 2
+    for (const row of rowsOf(uri, new Set())) {
+      const rowTopHalf = Math.max(...row.map((k) => hOf(k.uri) / 2))
+      down += GAP_Y + rowTopHalf + Math.max(...row.map((k) => spanDown(k.uri)))
+    }
+    spans.set(uri, down)
+    return down
+  }
+
   const off = new Map<string, { dx: number; dy: number }>()
   const nodeRoot = new Map<string, string>()
   const extent = new Map<string, { minDx: number; maxDx: number; maxDy: number }>()
@@ -566,19 +596,26 @@ export function treeTargets(nodes: TreeNode[], box: TreeLayoutBox): TreeTarget[]
     const e = extent.get(rootUri)!
     e.minDx = Math.min(e.minDx, dx)
     e.maxDx = Math.max(e.maxDx, dx)
-    e.maxDy = Math.max(e.maxDy, dy)
-    // Each row centres on its parent; when everything fits maxCols this is one
-    // row one unit down — byte-identical to the unwrapped layout.
-    let rowDy = dy + Y_UNIT
+    e.maxDy = Math.max(e.maxDy, dy) // centre-based, as before: the lens re-anchors
+    // its own tree top-centre, so the packer's bottom-edge clamp would be moot
+    // here and over-clamps a tall avatar chain for other callers (graph.test).
+    // Stack child rows by PIXEL span: each row sits below the actual bottom of
+    // the deepest card in the row above, so cards may vary in height (a short
+    // reply takes little room, a full-length post more). `down` tracks the
+    // distance from THIS node's centre to the current stacking floor. With
+    // uniform heights it reduces to the old one-row-per-Y_UNIT layout.
+    let down = hOf(uri) / 2 // start at the bottom edge of this node's own card
     for (const row of rowsOf(uri, new Set())) {
+      const rowTopHalf = Math.max(...row.map((k) => hOf(k.uri) / 2))
+      const rowCy = dy + down + GAP_Y + rowTopHalf // the row's shared centre line
       const total = row.reduce((sum, k) => sum + widthOf(k.uri, new Set()), 0)
       let cursor = -total / 2
       for (const k of row) {
         const w = widthOf(k.uri, new Set())
-        assign(k.uri, dx + (cursor + w / 2) * X_UNIT, rowDy, guard, rootUri)
+        assign(k.uri, dx + (cursor + w / 2) * X_UNIT, rowCy, guard, rootUri)
         cursor += w
       }
-      rowDy += Math.max(...row.map((k) => heightOf(k.uri, new Set()))) * Y_UNIT
+      down += GAP_Y + rowTopHalf + Math.max(...row.map((k) => spanDown(k.uri)))
     }
   }
   const assigned = new Set<string>()
@@ -647,7 +684,7 @@ export function treeTargets(nodes: TreeNode[], box: TreeLayoutBox): TreeTarget[]
       tx: rootX + o.dx,
       ty: rootY + o.dy,
       r: (minSize + n.sizeRank * (maxSize - minSize)) / 2, // size stays the node's own
-      ...(pill ? { hw: pill.w / 2, hh: pill.h / 2, group: rootUri } : {}),
+      ...(pill ? { hw: pill.w / 2, hh: hOf(n.uri) / 2, group: rootUri } : {}),
     }
   })
 }
