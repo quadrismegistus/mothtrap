@@ -380,6 +380,12 @@
   $effect(() => {
     if (batch !== null) return
     if (plan.length === 0) return
+    // Don't size a batch to an UNMEASURED frame. w/h bind from clientWidth/Height
+    // and are 0 until the canvas lays out, which collapses `budget` to its floor
+    // (8). Capturing in that window freezes a near-empty batch that then can't
+    // refill to the real frame — the "sometimes not a full batch on load" race
+    // (a race with the measurement, hence intermittent). Wait for a real size.
+    if (w === 0 || h === 0) return
     // Let the fetcher stock the pool first, so a batch isn't captured at 3 posts
     // when another page could fill it: wait while the pool is underfilled and
     // more is coming (a fetch in flight, or a cursor the auto-load effect —
@@ -594,13 +600,17 @@
   })
   const targets = $derived(pointLayout.posts)
 
-  // The focused conversation's member display-uris (≥2 placed, else null).
+  // The focused conversation's member display-uris (≥1, else null). The ≥2-vs-1
+  // decision lives in focusChain, which only sets focusedThread for a thread
+  // worth drawing: a lone member here means a post whose replies aren't on the
+  // map yet — the lens fetches them as guests, so the tree still forms (≥2 with
+  // its first guest). A single un-guested member yields a null lensTree (no-op).
   const focusMembers = $derived.by(() => {
     if (!focusedThread) return null
     const c = convos.find((c) => c.id === focusedThread)
     if (!c) return null
     const s = new Set(c.members.map((m) => displayNodeOf(m.post.uri)))
-    return s.size >= 2 ? s : null
+    return s.size ? s : null
   })
 
   // LENS GUESTS: the parts of the conversation your feed never surfaced —
@@ -1179,8 +1189,12 @@
   }
 
   function cardPos(p: { px: number; py: number; size: number }) {
-    let x = p.px + p.size / 2 + 12
-    if (x + CARD_W > w) x = p.px - p.size / 2 - 12 - CARD_W
+    // In pill mode the node is far wider than its avatar, so offsetting by the
+    // avatar radius (p.size/2) lands the card ON the pill. Clear the pill's own
+    // edge (pill.w/2) instead, so the card always sits beside it, not over it.
+    const halfW = pill ? pill.w / 2 : p.size / 2
+    let x = p.px + halfW + 12
+    if (x + CARD_W > w) x = p.px - halfW - 12 - CARD_W
     if (x < 8) x = 8
     // y is just an anchor; the card clamps its own top by its measured height.
     const y = Math.max(8, p.py - p.size / 2)
@@ -1999,7 +2013,12 @@
   function focusChain(uri: string) {
     if (lensUris?.has(uri)) return
     const c = convos.find((c) => c.members.some((m) => m.post.uri === uri))
-    focusedThread = c && c.members.length > 1 ? c.id : null
+    // Focus any thread worth drawing as a tree: a conversation already showing
+    // ≥2 members, OR a lone post that HAS replies we simply haven't drawn — the
+    // lens fetch pulls its whole tree in as guests, the same way a multi-member
+    // conversation's unseen siblings arrive. A post with no replies stays inert.
+    const hasReplies = (contextByUri.get(uri)?.post.replyCount ?? 0) > 0
+    focusedThread = c && (c.members.length > 1 || hasReplies) ? c.id : null
   }
 
   function nextBatch() {
