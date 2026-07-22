@@ -2770,7 +2770,7 @@
       context={whyHere(c.node)}
       onreply={(it) => compose.openReply(it)}
       onquote={(it) => compose.openQuote(it)}
-      onmapreplies={toggleMapReplies}
+      onmapreplies={(it) => focusChain(it.post.uri)}
       onswipe={onCardSwipe}
       onrate={(it, kind) => react(it.post.uri, kind)}
       showClose={coarsePointer}

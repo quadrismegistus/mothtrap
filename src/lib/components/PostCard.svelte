@@ -596,7 +596,7 @@
   {#if canMapReplies && !node}
     <div class="foot">
       <button class="map-replies" class:on={repliesMapped} onclick={() => onmapreplies?.(item)}>
-        {repliesMapped ? 'Hide replies' : `Map replies${item.post.replyCount ? ` (${item.post.replyCount})` : ''}`}
+        View thread{item.post.replyCount ? ` (${item.post.replyCount})` : ''}
       </button>
     </div>
   {/if}
