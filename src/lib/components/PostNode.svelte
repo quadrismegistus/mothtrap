@@ -1,8 +1,10 @@
 <script lang="ts">
   import { AppBskyFeedPost } from '@atproto/api'
   import type { GraphNode } from '../state/graph'
+  import type { FeedItem } from '../api/timeline'
   import { authorName, reposterProfile } from '../api/post'
   import { moderation } from '../state/moderation.svelte'
+  import PostCard from './PostCard.svelte'
 
   interface Props {
     node: GraphNode
@@ -13,12 +15,19 @@
     /** Pill mode: render avatar + the opening line of the post, at this fixed
      * w x h, instead of a bare avatar circle. */
     pill?: { w: number; h: number }
+    /** Reader mode (focus lens): render the FULL post text in a card of this
+     * w x h, so a thread reads without hovering. Overrides `pill` for size and
+     * layout; media/quote get a flag chip that invites a hover for the embed. */
+    reader?: { w: number; h: number }
     /** Newly on screen: animate it in from `enter` rather than appearing. */
     arriving?: boolean
     /** Offset to enter FROM, in container px. */
     enter?: { x: number; y: number }
     hasReplies: boolean
     active: boolean
+    /** Fellow member of the hovered post's conversation — soft highlight so the
+     * chain reads as one thing while you look at any of its posts. */
+    related?: boolean
     pinned: boolean
     /** A dismissed ancestor resurrected for chain context — dimmed, no ✕. */
     ghost: boolean
@@ -35,6 +44,15 @@
     ondismiss: (uri: string) => void
     ondragmove: (uri: string, clientX: number, clientY: number) => void
     ondragend: (uri: string) => void
+    /** Reader lens: report the card's true rendered height so the packer can
+     * size the node to its content (no fixed-estimate empty space below it). */
+    onmeasure?: (uri: string, height: number) => void
+    /** Reader-lens inline actions: the card IS the read surface, so its action
+     * row (reply/repost/like/⋯ + private vote) lives on it rather than on a
+     * popped card. */
+    onreply?: (item: FeedItem) => void
+    onquote?: (item: FeedItem) => void
+    onrate?: (uri: string, kind: 'up' | 'down') => void
   }
   let {
     node,
@@ -42,10 +60,12 @@
     py,
     size,
     pill,
+    reader,
     arriving = false,
     enter,
     hasReplies,
     active,
+    related = false,
     pinned,
     ghost,
     reaction,
@@ -58,7 +78,18 @@
     ondismiss,
     ondragmove,
     ondragend,
+    onreply,
+    onquote,
+    onrate,
+    onmeasure,
   }: Props = $props()
+
+  // Reader lens: the card is auto-height, so report its rendered height back so
+  // the tree packer can reserve exactly that (see Graph's measuredHeights).
+  let measuredH = $state(0)
+  $effect(() => {
+    if (reader && measuredH > 0) onmeasure?.(node.uri, measuredH)
+  })
 
   // Held at the entry offset for one frame, then released so CSS carries it
   // home. Two rAFs: one to let the offset paint, one to change it -- a single
@@ -114,7 +145,9 @@
   let lastPointerType = 'mouse'
 
   function onContextMenu(e: MouseEvent) {
-    if (lastPointerType !== 'mouse') return
+    // Reader cards are full PostCards — leave right-click to the browser (select
+    // / copy text) rather than dismissing the thread.
+    if (reader || lastPointerType !== 'mouse') return
     e.preventDefault() // no browser menu over the graph
     e.stopPropagation()
     // Ghosts are ancestors resurrected for context and were already dismissed;
@@ -126,6 +159,9 @@
     lastPointerType = e.pointerType
     if (e.button !== 0) return
     dragMoved = false
+    // Reader cards don't drag — the wrap is fixed by the tree, and a drag would
+    // fight text selection / the card's own scroll.
+    if (reader) return
     // Mouse only: drag to reposition. On touch a node does nothing on pointer-
     // down — a tap opens the card (onclick), and the triage swipe lives on the
     // CARD now (the node is covered by the card on a phone, and up/down there
@@ -152,16 +188,19 @@
 
 <div
   class="wrap"
-  class:pill={!!pill}
+  class:pill={!!pill || !!reader}
+  class:reader={!!reader}
   class:arriving
   class:entering={arriving && !landed}
   class:active
+  class:related
   class:pinned
   class:ghost
   class:unfollowed
   class:thread={node.isThreadRoot}
-  style="left: {px}px; top: {py}px; width: {pill ? pill.w : size}px; height: {pill ? pill.h : size}px; --ex: {enter?.x ?? 0}px; --ey: {enter?.y ?? 0}px;{accent ? ` --accent-topic: ${accent};` : ''}"
+  style="left: {px}px; top: {py}px; width: {reader ? reader.w : pill ? pill.w : size}px; height: {reader ? 'auto' : (pill ? pill.h : size) + 'px'}; --ex: {enter?.x ?? 0}px; --ey: {enter?.y ?? 0}px;{accent ? ` --accent-topic: ${accent};` : ''}"
   role="group"
+  bind:clientHeight={measuredH}
   onpointerenter={(e) => e.pointerType === 'mouse' && onhover(node.uri)}
   onpointerleave={(e) => e.pointerType === 'mouse' && onhover(null)}
   onpointerdown={onPointerDown}
@@ -176,39 +215,52 @@
       {/if}
     </span>
   {/if}
-  <button
-    class="node"
-    class:replies={hasReplies}
-    class:covered={cover.blur}
-    aria-label={cover.blur ? `${authorName(node.item)} — ${cover.reason}` : authorName(node.item)}
-    onclick={() => !dragMoved && onclick(node)}
-    ondblclick={() => !dragMoved && ondblclick(node)}
-  >
-    <span class="face">
-      {#if avatar}
-        <img src={avatar} alt={authorName(node.item)} draggable="false" />
-      {:else}
-        <span class="initial">{authorName(node.item).charAt(0).toUpperCase()}</span>
-      {/if}
-      {#if cover.blur}
-        <span class="cover-mark" title={cover.reason} aria-hidden="true">⚠</span>
-      {/if}
-    </span>
-    {#if pill}
-      <span class="say">
-        <span class="who">{authorName(node.item)}</span>
-        <!-- Covered posts stay covered here too: the pill would otherwise print
-             in plain text exactly what the blurred avatar is hiding. -->
-        <span class="text">{cover.blur ? cover.reason : preview}</span>
+  {#if reader}
+    <!-- Reader lens: the node IS a full post card (header, rich text, inline
+         images/quotes, action row) — the same PostCard used as a hover overlay,
+         in its node variant. The wrap owns position, the ring, and the ✕. -->
+    <PostCard
+      node
+      item={node.item}
+      onreply={(it) => onreply?.(it)}
+      onquote={(it) => onquote?.(it)}
+      onrate={(it, k) => onrate?.(it.post.uri, k)}
+    />
+  {:else}
+    <button
+      class="node"
+      class:replies={hasReplies}
+      class:covered={cover.blur}
+      aria-label={cover.blur ? `${authorName(node.item)} — ${cover.reason}` : authorName(node.item)}
+      onclick={() => !dragMoved && onclick(node)}
+      ondblclick={() => !dragMoved && ondblclick(node)}
+    >
+      <span class="face">
+        {#if avatar}
+          <img src={avatar} alt={authorName(node.item)} draggable="false" />
+        {:else}
+          <span class="initial">{authorName(node.item).charAt(0).toUpperCase()}</span>
+        {/if}
+        {#if cover.blur}
+          <span class="cover-mark" title={cover.reason} aria-hidden="true">⚠</span>
+        {/if}
       </span>
-    {/if}
-  </button>
+      {#if pill}
+        <span class="say">
+          <span class="who">{authorName(node.item)}</span>
+          <!-- Covered posts stay covered here too: the pill would otherwise print
+               in plain text exactly what the blurred avatar is hiding. -->
+          <span class="text">{cover.blur ? cover.reason : preview}</span>
+        </span>
+      {/if}
+    </button>
+  {/if}
 
-  {#if isReply}
+  {#if isReply && !reader}
     <span class="reply-badge" title="This post is a reply">↩</span>
   {/if}
 
-  {#if reaction}
+  {#if reaction && !reader}
     <span
       class="reaction-badge {reaction}"
       title={reaction === 'up' ? 'You thumbed this up (private)' : 'You thumbed this down (private)'}
@@ -216,7 +268,7 @@
     >
   {/if}
 
-  {#if node.collapsedCount > 0}
+  {#if !reader && node.collapsedCount > 0}
     <button
       class="badge expand-badge"
       title="{node.collapsedCount} more in thread — click to expand"
@@ -224,7 +276,7 @@
       onclick={() => !dragMoved && onexpand(node)}
       >+{node.collapsedCount}</button
     >
-  {:else if node.run && node.run.length > 1}
+  {:else if !reader && node.run && node.run.length > 1}
     <span class="badge run-badge" title="{node.run.length} consecutive posts by this author — the card scrolls through them"
       >{node.run.length}≡</span
     >
@@ -298,6 +350,15 @@
   }
   .wrap.active {
     z-index: 50;
+  }
+  /* Fellow members of the hovered post's conversation: a softer ring in the
+     thread's topic colour (white fallback), dimmer than the gold active ring so
+     the chain reads as context around the post you're actually on. */
+  .wrap.related .node {
+    border-color: var(--accent-topic, rgba(255, 255, 255, 0.75));
+    box-shadow:
+      0 0 0 2px var(--bg),
+      0 0 0 4px var(--accent-topic, rgba(255, 255, 255, 0.45));
   }
   .wrap.pinned .node {
     border-color: #e0a838;
@@ -439,6 +500,26 @@
     line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
+  }
+
+  /* ---- Reader lens ------------------------------------------------------
+     Each lens node is a full PostCard (its `node` variant). The WRAP is just the
+     graph-node shell: it owns position/size, the state ring, and the ✕ — the
+     card's own border/background/scroll belong to PostCard. */
+  .wrap.reader {
+    border-radius: 14px; /* the ring below follows the card's corners */
+  }
+  .wrap.reader.thread {
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-topic, var(--accent));
+  }
+  .wrap.reader.related {
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-topic, rgba(255, 255, 255, 0.6));
+  }
+  .wrap.reader.pinned {
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px #e0a838;
+  }
+  .wrap.reader.active {
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 5px #ffcf4a;
   }
 
   .node {

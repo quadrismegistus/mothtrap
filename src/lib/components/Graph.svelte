@@ -1,5 +1,7 @@
 <script lang="ts">
   import { getFeedPage, type FeedItem } from '../api/timeline'
+  import { fetchThread } from '../api/thread'
+  import { AppBskyFeedPost } from '@atproto/api'
   import { feeds } from '../state/feeds.svelte'
   import { bskyUrl, reposter, reposterProfile } from '../api/post'
   import {
@@ -8,7 +10,7 @@
     climbChain,
     contextNode,
     buildTimeDomain,
-    layoutPositions,
+    NEW_TAIL,
     positionsFrozenTime,
     timeDomainIsStale,
     type TimeDomain,
@@ -16,10 +18,8 @@
     rootUriOf,
     threadDescendants,
     treeTargets,
-    withTopicPills,
     type GraphNode,
     type SelectMode,
-    type TopicPill,
     type TreeNode,
   } from '../state/graph'
   import { Layout, pillBudgetBase, type Target } from '../state/layout'
@@ -47,7 +47,7 @@
   import { isDemo } from '../api/demo'
   import { convoColor } from '../api/llm'
   import { untrack } from 'svelte'
-  import { SvelteSet } from 'svelte/reactivity'
+  import { SvelteSet, SvelteMap } from 'svelte/reactivity'
   import PostNode from './PostNode.svelte'
   import PostCard from './PostCard.svelte'
   import DigestPanel from './DigestPanel.svelte'
@@ -113,6 +113,61 @@
         { w: Math.round(Math.min(212, Math.max(148, w - 32))), h: PILL_H, gap: PILL_GAP }
       : undefined,
   )
+  // READER LENS (spike within the spike): inside the focus lens every tree
+  // member renders as a FULL-TEXT reader card — you read the whole thread
+  // without hovering. Wider and taller than a scatter pill (room for the text),
+  // clamped to the frame so it still fits a phone. Media/quote posts can't be
+  // read inline, so PostNode flags them and their hover-card still pops. This is
+  // the lens's own node size, independent of the scatter's avatar/pill choice.
+  // Tall enough to show a full-length post (Bluesky caps at 300 chars) without
+  // truncation on a desktop-width card — ~7 lines at this width, headroom to 10.
+  // Every card is this tall regardless of its text, which wastes space on short
+  // replies: that's the cue to move to VARIABLE height next (size each card to
+  // its own content). Fixed-full first, so the reading itself can be judged.
+  const READER_MAX_H = 340 // cap; a taller card scrolls internally (PostCard node)
+  const readerPill = $derived({
+    // Narrower than a "one-line-per-post" card: text wraps to more lines, so a
+    // card reads a bit taller and less wide (a calmer column in the tree).
+    w: Math.round(Math.min(300, Math.max(212, w - 40))),
+    h: READER_MAX_H,
+    gap: { x: 22, y: 18 },
+  })
+  // Estimate a lens card's height so the tree packer can size each node. It's a
+  // cheap synchronous guess (no DOM measure) — header + text lines + a bounded
+  // allowance for the embed PostCard renders inline + the action row — deliberately
+  // erring TALL and clamped to READER_MAX_H. The card's wrap is set to exactly
+  // this height and PostCard fills it (scrolling if content overruns), so the
+  // packer's assumption and the render match by construction: a low estimate just
+  // adds a scrollbar, a high one a little bottom air — never an overlap.
+  function readerCardHeight(item: FeedItem): number {
+    const rec = item.post.record
+    const text = AppBskyFeedPost.isRecord(rec) ? rec.text.trim() : ''
+    const textW = readerPill.w - 24 // padding
+    const cpl = Math.max(12, Math.floor(textW / 6.8)) // ~chars per line at 0.82rem
+    let lines = 0
+    for (const para of (text || ' ').split('\n')) lines += Math.max(1, Math.ceil(para.length / cpl))
+    const t = (item.post.embed as { $type?: string } | undefined)?.$type ?? ''
+    let embed = 0
+    if (t.includes('recordWithMedia')) embed = 176 + 96
+    else if (t.includes('images') || t.includes('video')) embed = 176
+    else if (t.includes('record')) embed = 100
+    else if (t.includes('external')) embed = 84
+    const chrome = 42 /*header*/ + 36 /*actions*/ + 22 /*padding*/
+    return Math.round(Math.min(READER_MAX_H, Math.max(96, chrome + lines * 18 + embed)))
+  }
+  // MEASURE PASS: each lens card is auto-height and reports its true rendered
+  // height here; the packer uses the measurement (falling back to the estimate
+  // for the first frame), so a card is exactly as tall as its content — no
+  // fixed-estimate empty space below it. Height is width-determined and doesn't
+  // depend on position, so the measure → repack loop settles in a frame.
+  const measuredHeights = new SvelteMap<string, number>()
+  function measureCard(uri: string, h: number) {
+    if (h > 0 && measuredHeights.get(uri) !== h) measuredHeights.set(uri, h)
+  }
+  // A rolling hash, NOT a sum: two cards changing height by canceling deltas in
+  // the same flush would leave a sum unchanged, so the solve would freeze on
+  // stale positions. Order-sensitive so any per-card change moves the signature.
+  const measuredSig = $derived([...measuredHeights.values()].reduce((a, b) => (a * 31 + b) | 0, 0))
   /**
    * The reservoir: how far the world extends past each edge of the frame, and
    * how many extra posts that buys. A ring roughly one pill deep holds about
@@ -166,7 +221,9 @@
       const cell = (pill.w + pill.gap.x) * (pill.h + pill.gap.y)
       const fw = Math.max(0, w - 24)
       const fh = Math.max(0, h - PAD_TOP - 60)
-      base = pillBudgetBase(fw, fh, cell, bleed.x, bleed.y, OVERFLOW)
+      // POINTS SPIKE: no reservoir — budget the FRAME alone (0 bleed, 0 overflow),
+      // so we plan what fits the viewport WELL rather than a world+ring's worth.
+      base = pillBudgetBase(fw, fh, cell, 0, 0, 0)
     } else {
       base = ((w * h) / 1e6) * 14.5
     }
@@ -188,6 +245,23 @@
   // Threads the user has mapped in (by thread root uri), and pinned nodes (by uri).
   const expanded = new SvelteSet<string>()
   const pinned = new SvelteSet<string>()
+  // FOCUS LENS (points spike): the conversation temporarily gathered into tidy-
+  // tree form centre-stage (by conversation id). Click a chain member to focus;
+  // click the background (or a chainless post) to release. Non-members' targets
+  // never change and the solver is deterministic, so release restores their
+  // exact positions by construction.
+  let focusedThread = $state<string | null>(null)
+  // The specific post the user clicked to open the lens — its branch (spine to
+  // the root) is always kept when sibling-capping, so the thing you opened never
+  // collapses out from under you.
+  let focusedPost = $state<string | null>(null)
+  // Per-post reveal count in the lens: how many direct replies to draw under a
+  // post (parent uri → count). Absent = the base cap; each "+K more" click adds
+  // LENS_SIBLING_STEP. Cleared on each new focus, so a fresh thread starts capped.
+  const lensExpanded = new SvelteMap<string, number>()
+  // Total revealed beyond the base cap, so the solve signature changes when a
+  // parent's count grows (Map.size alone wouldn't — it's the same key).
+  const lensExpandTotal = $derived([...lensExpanded.values()].reduce((a, b) => a + b, 0))
   // Topic pills the user double-clicked to reveal ALL their member posts (by
   // conversation id), even those the node budget would otherwise leave off.
   const revealedTopics = new SvelteSet<string>()
@@ -264,10 +338,16 @@
   // feed the classifier (a bare reply is unclassifiable without it).
   const contextByUri = $derived(new Map(allItems.map((i) => [i.post.uri, i])))
   const primaryUris = $derived(new Set(primarySources.map((i) => i.post.uri)))
+  // POINTS SPIKE — the BATCH is the unit of layout. One set of posts is chosen,
+  // laid out well, and only DRAINS as you dismiss; live-poll arrivals and later
+  // pages pool invisibly for the next batch. Null = between batches (the plan
+  // selects freely and the capture effect below takes a snapshot).
+  let batch = $state<Set<string> | null>(null)
   const visible = $derived(
     allItems.filter(
       (i) =>
         !read.isDismissed(i.post.uri) &&
+        (batch === null || batch.has(i.post.uri)) &&
         // "Hide muted replies" drops silenced ANCESTORS from the graph entirely,
         // not just the feed. corpus.contextItems is unmoderated, so a muted
         // account pulled in as reply context reaches allItems; without this it
@@ -322,8 +402,11 @@
       convos.filter((c) => !heldConvoIds.has(c.id) && (c.hasPrimary || forceFull.has(c.id))),
       {
         budget,
-        // Reply chains OFF = conversations render collapsed unless mapped.
-        autoUnrollMax: settings.replyChains ? 10 : 0,
+        // Unroll conversations into individual posts when EITHER connecting
+        // replies (points-lens era: show each feed post + its one parent) or the
+        // legacy full chains are on. visibleNodes then trims to feed post +
+        // immediate parent. Only fully off = collapsed reps, no reply edges.
+        autoUnrollMax: settings.connectReplies || settings.replyChains ? 10 : 0,
         perAuthorMax: 3,
         forceFull,
         ranking: settings.selectMode,
@@ -361,6 +444,48 @@
   const total = $derived(plan.length)
   const queued = $derived(plan.filter((p) => p.level === 'hidden').length)
 
+  // Batch capture: when between batches and the pool is stocked (budget met, or
+  // nothing left to fetch), snapshot the plan's chosen conversations — COMPLETE
+  // memberships, so a collapsed rep keeps its +N members — as the new batch.
+  $effect(() => {
+    if (batch !== null) return
+    if (plan.length === 0) return
+    // Don't size a batch to an UNMEASURED frame. w/h bind from clientWidth/Height
+    // and are 0 until the canvas lays out, which collapses `budget` to its floor
+    // (8). Capturing in that window freezes a near-empty batch that then can't
+    // refill to the real frame — the "sometimes not a full batch on load" race
+    // (a race with the measurement, hence intermittent). Wait for a real size.
+    if (w === 0 || h === 0) return
+    // Let the fetcher stock the pool first, so a batch isn't captured at 3 posts
+    // when another page could fill it: wait while the pool is underfilled and
+    // more is coming (a fetch in flight, or a cursor the auto-load effect —
+    // which only runs between batches — will chase). Settles when the budget is
+    // met or the feed is exhausted.
+    if (total < budget && (loading || cursor)) return
+    const s = new Set<string>()
+    for (const p of plan) {
+      if (p.level === 'hidden') continue
+      for (const m of p.convo.members) s.add(m.post.uri)
+    }
+    batch = s
+  })
+  // Batch cleared → drop it; the plan re-selects from everything waiting and the
+  // capture above takes the next batch. This is the ONE moment a full re-layout
+  // happens — where a reflow is expected rather than disruptive.
+  $effect(() => {
+    if (batch !== null && total === 0 && !loading) batch = null
+  })
+  // Your OWN just-composed posts (and replies) must appear at once — they don't
+  // wait for the next batch the way polled/paged arrivals do. Fold them into the
+  // live batch. Value-guarded so it settles (no re-add once present).
+  $effect(() => {
+    if (batch === null) return
+    const b = batch
+    let added = false
+    for (const i of compose.injected) if (!b.has(i.post.uri)) (b.add(i.post.uri), (added = true))
+    if (added) batch = new Set(b)
+  })
+
   // Which nodes to show (top/recent/mix), plus pinned nodes and — when "connect
   // replies" is on — the present ancestor chain of each shown node, so a reply is
   // drawn connected to the post it replies to. Layout is computed over this set.
@@ -379,6 +504,7 @@
   const visibleNodes = $derived.by(() => {
     const set = new Map<string, GraphNode>()
     const seatedRep = new Set<string>()
+    const repUris = new Set<string>()
     for (const n of graph.nodes) {
       if (plannedFullUris.has(n.uri)) {
         set.set(n.uri, n)
@@ -388,6 +514,7 @@
       if (convoId && !seatedRep.has(convoId)) {
         seatedRep.add(convoId)
         set.set(n.uri, n) // one node per rep-planned conversation
+        repUris.add(n.uri)
       }
     }
     // Pinned nodes stay visible regardless of what the plan rotates out.
@@ -424,7 +551,23 @@
         (settings.hideMutedReplies && moderation.isSilenced(a.item.post.author))
       climbChain(starts, set, parentNodeOf, prune)
     }
-    return [...set.values()]
+    // POINTS-LENS era: the FULL thread lives in the lens now, so the scatter
+    // ALWAYS keeps each feed post (plus reps/pinned/mapped) and only its
+    // IMMEDIATE parent — never the deep ancestry the climb/plan pulls in. (The
+    // old full-chain scatter is what the lens replaces, so this ignores the
+    // now-legacy `replyChains` setting; the lens fetches its own thread, so what
+    // you read THERE is unaffected.)
+    const present = new Set(set.keys())
+    const keep = new Set<string>()
+    for (const n of set.values()) {
+      if (!(primaryUris.has(n.uri) || repUris.has(n.uri) || pinned.has(n.uri) || expanded.has(n.uri)))
+        continue
+      keep.add(n.uri)
+      const raw = parentUriOf(n.item)
+      const p = raw ? graph.memberNode.get(raw) ?? raw : undefined // its display-parent
+      if (p && p !== n.uri && present.has(p)) keep.add(p)
+    }
+    return [...set.values()].filter((n) => keep.has(n.uri))
   })
   /**
    * Rank across the whole corpus in reservoir mode, not just the posts on
@@ -465,10 +608,34 @@
   // tolerable because timeDomainIsStale is a pure test of the corpus, so a late
   // capture produces the same domain a prompt one would.
   let timeDomain: TimeDomain | null = null
+  // The batch's ranking BASELINE, captured once per batch (keyed by the batch
+  // Set's identity, same lazy-capture pattern as timeDomain above): the batch's
+  // own nodes + their time domain. Ranking WITHIN the batch spreads the visible
+  // set uniformly over the frame (corpus-wide ranks bunch it — the crowded
+  // bottom band); freezing the baseline for the batch's lifetime keeps every
+  // survivor's position fixed as the batch drains. Anything that joins mid-batch
+  // (an expanded thread's members, climbed-in ancestors) ranks against the same
+  // frozen arrays, slotting in honestly without moving anyone else.
+  let baseFor: Set<string> | null = null
+  let batchCorpus: GraphNode[] = []
+  let batchDomain: TimeDomain | null = null
   const nodeLayout = $derived.by(() => {
-    if (!bleed.x) return layoutPositions(visibleNodes)
-    if (timeDomainIsStale(timeDomain, graph.nodes)) timeDomain = buildTimeDomain(graph.nodes)
-    return positionsFrozenTime(visibleNodes, graph.nodes, timeDomain!)
+    if (batch && baseFor !== batch) {
+      baseFor = batch
+      batchCorpus = visibleNodes
+      batchDomain = buildTimeDomain(batchCorpus)
+    }
+    if (!batch || !batchDomain || batchCorpus.length === 0) {
+      // Between batches (boot, feed switch): corpus-frozen, as before.
+      if (timeDomainIsStale(timeDomain, graph.nodes)) timeDomain = buildTimeDomain(graph.nodes)
+      return positionsFrozenTime(visibleNodes, graph.nodes, timeDomain!)
+    }
+    const pos = positionsFrozenTime(visibleNodes, batchCorpus, batchDomain)
+    // positionsFrozenTime reserves NEW_TAIL of x for newer-than-domain arrivals;
+    // a batch barely gets any, so stretch the head back over the full axis
+    // (post-domain arrivals clamp to the right edge, which is honest enough).
+    for (const p of pos.values()) p.x = Math.min(1, p.x / (1 - NEW_TAIL))
+    return pos
   })
 
   const visibleUris = $derived(new Set(visibleNodes.map((n) => n.uri)))
@@ -500,85 +667,294 @@
     return c
   })
 
-  // Semantic targets (px) each node is pulled toward. The conversation is the
-  // spatial unit: a chain's topmost visible node anchors to the semantic axes,
-  // its replies hang below as a tidy tree. The math lives in treeTargets (pure,
-  // tested); here we resolve each node's parent through displayNodeOf (run head /
-  // representative) so childrenOf and root-detection agree by construction.
-  // A topic PILL is laid out like the root of a reply tree: it's a synthetic
-  // node anchored at its LOUDEST visible member's semantic position, and its
-  // member OPs (with their reply-subtrees) hang below it — instead of a pill at
-  // the members' centroid with edges radiating across the page. treeTargets
-  // does both the post trees and the pill trees in one pass; we split the result.
-  const treeLayout = $derived.by(() => {
-    // When the digest panel is open it overlays the right edge, so shrink the
-    // usable width by the panel so every node stays visible to its left.
+  // POINTS SPIKE: no reply-tree layout. Every post sits at its TRUE (time,
+  // engagement) coordinate, mapped straight across the frame — the honest
+  // scatter the semantic axes always promised, with no tidy-tree geometry
+  // bending a reply's position away from where it belongs. Reply chains are read
+  // in the thread-view dialog, not drawn on the map. Topic membership is worn BY
+  // the posts (caption + shared tint) rather than drawn as a hub node — a hub
+  // has no honest position on semantic axes, and its spokes are exactly the
+  // radiating connectors this layout exists to remove. The collision solver
+  // only nudges genuine overlaps apart.
+  const pointLayout = $derived.by(() => {
+    // The digest panel overlays the right edge when open; keep posts to its left.
     const panelW = showDigest ? Math.min(PANEL_W, w * 0.88) : 0
-    // Lay out across the WORLD, not the frame: rank is normalised over this
-    // box, so the lowest-ranked land in the reservoir outside the viewport.
-    // Dismiss an on-screen post and every rank shifts, drifting the reservoir
-    // inward -- gravity, with no extra force to tune.
-    const innerW = bleed.x
-      ? Math.max(0, w - panelW) + 2 * bleed.x
-      : Math.max(0, w - 2 * PAD_X - panelW)
-    const frameH = Math.max(0, h - PAD_TOP - Math.max(PAD_BOTTOM, bottomChrome + 8))
-    const innerH = frameH + 2 * bleed.y
-    const present = new Set(visibleNodes.map((n) => n.uri))
-    const postNodes: TreeNode[] = visibleNodes.map((n) => {
-      const raw = parentUriOf(n.item)
-      const p = raw ? displayNodeOf(raw) : undefined
+    const innerW = Math.max(0, w - 2 * PAD_X - panelW)
+    const innerH = Math.max(0, h - PAD_TOP - Math.max(PAD_BOTTOM, bottomChrome + 8))
+    const sx = (x: number) => PAD_X + x * innerW
+    const sy = (y: number) => PAD_TOP + y * innerH
+
+    const posts: Target[] = visibleNodes.map((n) => {
       const a = nodeLayout.get(n.uri) ?? { x: 0.5, y: 0.5, sizeRank: 0.5 }
       return {
-        uri: n.uri,
-        timestamp: n.timestamp,
-        parent: p && p !== n.uri && present.has(p) ? p : undefined,
-        x: a.x,
-        y: a.y,
-        sizeRank: a.sizeRank,
+        id: n.uri,
+        tx: sx(a.x),
+        ty: sy(a.y),
+        r: (MIN_SIZE + a.sizeRank * (MAX_SIZE - MIN_SIZE)) / 2,
+        ...(pill ? { hw: pill.w / 2, hh: pill.h / 2 } : {}),
       }
     })
-    // Topic pills become tree roots over their (visible, display-resolved)
-    // members; withTopicPills does the loudest-anchor + thread-root reparenting.
-    const pills: TopicPill[] = topicMembership.map((m) => ({
-      sid: m.sid,
-      members: [...new Set(m.uris.map((u) => displayNodeOf(u)))].filter((u) => present.has(u)),
-    }))
-    const pillSids = new Set(pills.map((p) => p.sid))
+    return { posts }
+  })
+  const targets = $derived(pointLayout.posts)
 
-    const all = treeTargets(withTopicPills(postNodes, pills), {
-      padX: bleed.x ? -bleed.x : PAD_X,
-      padTop: bleed.y ? PAD_TOP - bleed.y : PAD_TOP,
-      innerW,
-      innerH,
-      // Row wrapping budgets against the window, not the world — innerW/H
-      // include the reservoir bleed in pill mode (see TreeLayoutBox.frameW).
-      frameW: bleed.x ? Math.max(0, w - panelW) : innerW,
-      frameH,
+  // The focused conversation's member display-uris (≥1, else null). The ≥2-vs-1
+  // decision lives in focusChain, which only sets focusedThread for a thread
+  // worth drawing: a lone member here means a post whose replies aren't on the
+  // map yet — the lens fetches them as guests, so the tree still forms (≥2 with
+  // its first guest). A single un-guested member yields a null lensTree (no-op).
+  const focusMembers = $derived.by(() => {
+    if (!focusedThread) return null
+    const c = convos.find((c) => c.id === focusedThread)
+    if (!c) return null
+    const root = rootUriOf(c.members[0])
+    const s = new Set(c.members.map((m) => displayNodeOf(m.post.uri)))
+    // Also every OTHER on-map node in the SAME thread (shared root) — above all
+    // GHOSTS of already-dismissed ancestors, which `convos` omits (it's built
+    // from the non-dismissed `visible`). Without this the ghost stays a scatter
+    // node, gets exiled off-frame, and dangles its reply's edge off-screen.
+    // Root-based, NOT fetch-based, so it holds even when the thread fetch can't
+    // return the dismissed post — deleted/blocked/beyond depth, or a stale root
+    // pointer (the case the earlier fetch-based fix missed).
+    for (const n of visibleNodes) if (rootUriOf(n.item) === root) s.add(displayNodeOf(n.uri))
+    return s.size ? s : null
+  })
+
+  // LENS GUESTS: the parts of the conversation your feed never surfaced —
+  // siblings, branches — fetched on focus and shown ONLY inside the lens. They
+  // are lens citizens, not scatter citizens: never in the batch, the ranking
+  // baseline, or the plan. Release the lens and they're gone. Cached per thread
+  // root so refocusing is instant; a failed fetch stays uncached and retries.
+  let lensGuests = $state<FeedItem[]>([])
+  const lensCache = new Map<string, FeedItem[]>()
+  $effect(() => {
+    const fid = focusedThread
+    if (!fid) {
+      lensGuests = []
+      return
+    }
+    const m = convos.find((c) => c.id === fid)?.members[0]
+    if (!m) return
+    const root = rootUriOf(m)
+    const cached = lensCache.get(root)
+    // Clear the PREVIOUS thread's guests immediately (seed from cache if we have
+    // this root). Otherwise, switching lens A→B while B's fetch is in flight left
+    // lensGuests holding A's siblings, which lensPack lays out as orphan roots.
+    lensGuests = cached ?? []
+    if (cached) return
+    let stale = false
+    fetchThread(root)
+      .then((items) => {
+        lensCache.set(root, items)
+        if (!stale && focusedThread === fid) lensGuests = items
+      })
+      .catch(() => {}) // transient; a refocus retries
+    return () => {
+      stale = true
+    }
+  })
+  // Guests = fetched thread posts not already on the map (as a node, or covered
+  // by a collapsed rep). Posts you'd already DISMISSED come in too, as ghosts —
+  // so the tree stays whole (mirrors the scatter's resurrected-ancestor ghosts)
+  // rather than dropping a member and dangling its edge off-frame.
+  const guestNodes = $derived.by(() => {
+    if (!focusMembers || lensGuests.length === 0) return [] as GraphNode[]
+    const out: GraphNode[] = []
+    for (const it of lensGuests) {
+      const u = it.post.uri
+      if (visibleUris.has(u) || graph.memberNode.has(u)) continue
+      out.push(contextNode(it, read.isDismissed(u)))
+    }
+    return out
+  })
+  // Everything inside the lens (members + guests) — drives edge lighting,
+  // member rings, and keeps clicks inside the lens from releasing it.
+  const lensUris = $derived.by(() => {
+    if (!focusMembers) return null
+    const s = new Set(focusMembers)
+    for (const g of guestNodes) s.add(g.uri)
+    return s
+  })
+
+  // Cap the number of direct replies drawn under any one post in the lens, so a
+  // heavily-replied post can't fan the tree off both edges. Kept by priority —
+  // the clicked post's spine first (so the branch you opened never collapses),
+  // then feed members, then fetched guests — and the rest drop into a "+K more"
+  // node that lifts the cap for that post on click. A const for now, a candidate
+  // for a settings slider later.
+  const LENS_SIBLING_CAP = 2
+  const LENS_SIBLING_STEP = 2 // how many more "+K more" reveals per click
+  // The lens membership resolved to a KEPT set + per-parent overflow counts, via
+  // a capped walk from the thread roots.
+  const lensPack = $derived.by(() => {
+    if (!focusMembers || !lensUris) return null
+    const cand = new Map<string, GraphNode>()
+    for (const n of visibleNodes) if (focusMembers.has(n.uri)) cand.set(n.uri, n)
+    for (const g of guestNodes) cand.set(g.uri, g)
+    const parentOf = (n: GraphNode): string | undefined => {
+      const raw = parentUriOf(n.item)
+      const p = raw ? displayNodeOf(raw) : undefined
+      return p && p !== n.uri && cand.has(p) ? p : undefined
+    }
+    const kids = new Map<string, GraphNode[]>()
+    const roots: GraphNode[] = []
+    for (const n of cand.values()) {
+      const p = parentOf(n)
+      if (p) {
+        const a = kids.get(p)
+        if (a) a.push(n)
+        else kids.set(p, [n])
+      } else roots.push(n)
+    }
+    // The spine from the clicked post up to its root — always kept.
+    const spine = new Set<string>()
+    let cur: string | undefined = focusedPost ?? undefined
+    const climbed = new Set<string>()
+    while (cur && cand.has(cur) && !climbed.has(cur)) {
+      climbed.add(cur)
+      spine.add(cur)
+      cur = parentOf(cand.get(cur)!)
+    }
+    const prio = (n: GraphNode) => (spine.has(n.uri) ? 0 : n.ghost ? 2 : 1)
+    const kept = new Set<string>()
+    const overflow: { id: string; parent: string; count: number; timestamp: number }[] = []
+    const walk = (n: GraphNode) => {
+      if (kept.has(n.uri)) return
+      kept.add(n.uri)
+      const cs = (kids.get(n.uri) ?? [])
+        .slice()
+        .sort((a, b) => prio(a) - prio(b) || a.timestamp - b.timestamp)
+      const cap = Math.min(cs.length, lensExpanded.get(n.uri) ?? LENS_SIBLING_CAP)
+      if (cs.length > cap) {
+        overflow.push({ id: `more:${n.uri}`, parent: n.uri, count: cs.length - cap, timestamp: cs[cap].timestamp })
+      }
+      for (const k of cs.slice(0, cap)) walk(k)
+    }
+    for (const r of roots) walk(r)
+    return { cand, kept, overflow }
+  })
+
+  // Focus lens: chain members AND guests take tidy-tree positions — treeTargets
+  // ranks a lone conversation's anchor to 0.5, so the tree assembles
+  // centre-frame and its root is clamped to keep every descendant in bounds.
+  // Everyone else keeps their scatter target and is simply pushed aside by
+  // collision; the tree is a TEMPORARY arrangement, not a different world.
+  const lensTree = $derived.by<Map<string, Target> | null>(() => {
+    const pack = lensPack
+    if (!pack) return null
+    const { cand, kept, overflow } = pack
+    const chainNodes: TreeNode[] = []
+    const push = (n: GraphNode) => {
+      const raw = parentUriOf(n.item)
+      const p = raw ? displayNodeOf(raw) : undefined
+      chainNodes.push({
+        uri: n.uri,
+        timestamp: n.timestamp,
+        // Parent is always kept (the walk keeps parents before children).
+        parent: p && p !== n.uri && kept.has(p) ? p : undefined,
+        x: 0.5,
+        y: 0.5,
+        // Guests aren't in the batch baseline; a modest fixed rank sizes them.
+        sizeRank: nodeLayout.get(n.uri)?.sizeRank ?? 0.35,
+        // Measured card height when known, else the estimate for the first frame.
+        height: measuredHeights.get(n.uri) ?? readerCardHeight(n.item),
+      })
+    }
+    for (const uri of kept) {
+      const n = cand.get(uri)
+      if (n) push(n)
+    }
+    // Overflow markers ride the tree as small nodes hung under their parent.
+    // Infinity timestamp sorts them LAST (far right) among the siblings — "…and
+    // N more" belongs at the end of the row, not interleaved by time. (Infinity
+    // is non-finite, so treeTargets' anchor summary skips it — no rank skew.)
+    for (const o of overflow) {
+      chainNodes.push({ uri: o.id, timestamp: Infinity, parent: o.parent, x: 0.5, y: 0.5, sizeRank: 0.15, height: 30, slim: true })
+    }
+    if (chainNodes.length < 2) return null
+    const panelW = showDigest ? Math.min(PANEL_W, w * 0.88) : 0
+    const tree = treeTargets(chainNodes, {
+      padX: PAD_X,
+      padTop: PAD_TOP,
+      innerW: Math.max(0, w - 2 * PAD_X - panelW),
+      innerH: Math.max(0, h - PAD_TOP - Math.max(PAD_BOTTOM, bottomChrome + 8)),
+      // Don't wrap sibling fans to the frame — the lens PANS, and siblings are
+      // already capped at 3, so wide cards on a narrow frame shouldn't stack a
+      // 2-reply fan into a diagonal column. A huge frame budget = no wrapping;
+      // siblings stay on one row, the tree reads as a tree.
+      frameW: 1e6,
+      frameH: 1e6,
       minSize: MIN_SIZE,
       maxSize: MAX_SIZE,
-      pill,
+      pill: readerPill, // lens nodes are reader cards, so pack for THAT footprint
+      // Block layout (each subtree a contiguous column) — CLEAR to read. Contour
+      // compaction is narrower but interleaves branches confusingly; for a
+      // reading tree, clarity wins. Slim overflow markers keep block from being
+      // needlessly wide (see widthOf).
     })
-    const posts: Target[] = []
-    const pillMap = new Map<string, Target>()
-    // Topic pills are small labels, not posts. Stripping hw/hh made rectCollide
-    // fall back to `r` on BOTH axes, and r is 52 -- so a label reserved more
-    // VERTICAL room than a post pill does (52 vs 28), shoving conversations
-    // apart around itself, the opposite of the intent. Give them their own
-    // extents instead: wide enough for a label, short because they are one line.
-    for (const t of all)
-      pillSids.has(t.id)
-        ? pillMap.set(t.id, { ...t, hw: pill ? 52 : undefined, hh: pill ? 14 : undefined })
-        : posts.push(t)
-    return { posts, pills: pillMap }
+    // Classic tree presentation: ROOT AT TOP-CENTRE. treeTargets' anchor math
+    // is built for a tree coexisting with a scatter; the lens owns the whole
+    // stage, so translate the rigid tree to put its top row just under the top
+    // bar, centred on the frame's x. (A translation — the tree's shape is
+    // untouched.)
+    let minX = Infinity
+    let maxX = -Infinity
+    let minTop = Infinity
+    for (const t of tree) {
+      minX = Math.min(minX, t.tx)
+      maxX = Math.max(maxX, t.tx)
+      // Top EDGE, not centre: a tall reader card as the root would otherwise
+      // clip under the top bar (its centre sits low but its top rides high).
+      minTop = Math.min(minTop, t.ty - (t.hh ?? t.r))
+    }
+    const dx = PAD_X + Math.max(0, w - 2 * PAD_X - panelW) / 2 - (minX + maxX) / 2
+    const dy = PAD_TOP + 20 - minTop
+    return new Map(tree.map((t) => [t.id, { ...t, tx: t.tx + dx, ty: t.ty + dy }]))
   })
-  const targets = $derived(treeLayout.posts)
-  const pillTargets = $derived(treeLayout.pills)
+  // Kept lens uris (edges are drawn only among these — a capped-out sibling is
+  // off-frame, so an edge to it would dangle) and the overflow "+K" markers.
+  const lensKeptUris = $derived(lensPack?.kept ?? new Set<string>())
+  const overflowNodes = $derived(lensPack?.overflow ?? [])
+  const focusTargets = $derived.by<Target[]>(() => {
+    if (!lensTree) return targets
+    // Non-members FLY AWAY: exiled radially past the frame edge (made legal by
+    // the lens bleed in setBounds below), so the gathered tree stands alone
+    // like a classic tree diagram. Their scatter targets are never touched —
+    // release re-solves the original input and everyone flies home.
+    const cx = w / 2
+    const cy = h / 2
+    const R = Math.hypot(w, h) * 0.75
+    const out = targets.map((t) => {
+      const tree = lensTree.get(t.id)
+      if (tree) return tree
+      const ang = Math.atan2(t.ty - cy || 0.001, t.tx - cx || 0.001)
+      return { ...t, tx: cx + Math.cos(ang) * R, ty: cy + Math.sin(ang) * R }
+    })
+    for (const g of guestNodes) {
+      const t = lensTree.get(g.uri)
+      if (t) out.push(t)
+    }
+    for (const o of overflowNodes) {
+      const t = lensTree.get(o.id)
+      if (t) out.push(t)
+    }
+    return out
+  })
 
   const nodeByUri = $derived(new Map(visibleNodes.map((n) => [n.uri, n])))
+  // Per-node reader card size, read back from the packed tree (its hh is the
+  // node's variable half-height). Non-lens nodes aren't here, so the reader prop
+  // stays undefined and they render as scatter avatars/pills.
+  const readerBoxByUri = $derived.by(() => {
+    const m = new Map<string, { w: number; h: number }>()
+    if (!lensTree) return m
+    for (const [uri, t] of lensTree) m.set(uri, { w: readerPill.w, h: (t.hh ?? READER_MAX_H / 2) * 2 })
+    return m
+  })
 
   // Placed = target metadata + live simulation position (fallback to target).
-  const placed = $derived.by(() =>
-    targets.map((t) => {
+  const placed = $derived.by(() => {
+    const out = targets.map((t) => {
       const p = positions.get(t.id)
       return {
         node: nodeByUri.get(t.id) as GraphNode,
@@ -586,10 +962,34 @@
         py: p?.y ?? t.ty,
         size: t.r * 2,
       }
-    }),
-  )
+    })
+    // Lens guests render like any node while the lens is open, positioned by
+    // the lens tree (and solved with everyone else).
+    if (lensTree) {
+      for (const g of guestNodes) {
+        const t = lensTree.get(g.uri)
+        if (!t) continue
+        const p = positions.get(g.uri)
+        out.push({ node: g, px: p?.x ?? t.tx, py: p?.y ?? t.ty, size: t.r * 2 })
+      }
+    }
+    return out
+  })
 
   const placedByUri = $derived(new Map(placed.map((p) => [p.node.uri, p])))
+  // "+K more" overflow markers, at their solved tree positions (fallback to the
+  // raw target). Rendered as small buttons that lift the cap for their parent.
+  const overflowPlaced = $derived.by(() => {
+    const out: { id: string; parent: string; count: number; px: number; py: number }[] = []
+    if (!lensTree) return out
+    for (const o of overflowNodes) {
+      const t = lensTree.get(o.id)
+      if (!t) continue
+      const p = positions.get(o.id)
+      out.push({ id: o.id, parent: o.parent, count: o.count, px: p?.x ?? t.tx, py: p?.y ?? t.ty })
+    }
+    return out
+  })
 
   /**
    * Which posts are new on screen, so they can be animated IN.
@@ -659,8 +1059,16 @@
       uris.forEach((u) => claimed.add(u))
       if (uris.length === 0) continue
       const color = convoColor(c.id)
+      // POINTS SPIKE: no topic hub nodes — every member wears the label as a
+      // caption over the post (the system singletons always used). A repeated
+      // label over scattered pills IS the topic network, read locally; the
+      // shared colour ties them. `pills` still feeds colour-painting and the
+      // digest panel; it just no longer draws a hub on the map.
       if (uris.length === 1) captions.set(uris[0], { label: c.label, color })
-      else pills.push({ id: c.id, sid: `topic:${c.id}`, label: c.label, color, uris })
+      else {
+        pills.push({ id: c.id, sid: `topic:${c.id}`, label: c.label, color, uris })
+        for (const u of uris) captions.set(u, { label: c.label, color })
+      }
     }
     return { pills, captions }
   })
@@ -695,51 +1103,15 @@
     return m
   })
 
-  // Sim inputs use the members' STABLE target positions (not live ones), so the
-  // topic targets don't shift every tick — which would restart the sim forever.
-  const targetByUri = $derived(new Map(targets.map((t) => [t.id, t])))
-  const topicTargets = $derived.by<Target[]>(() =>
-    topicMembership
-      .map((m) => {
-        // 2+ visible members → the pill is a tree root (positioned by treeLayout);
-        // keep its wide collision radius but take the tree position.
-        const tree = pillTargets.get(m.sid)
-        if (tree) return { ...tree, r: 52 }
-        // Fewer than 2 visible → sit at the members' centroid, as before.
-        const pts = m.uris.map((u) => targetByUri.get(displayNodeOf(u))).filter((t): t is Target => t != null)
-        if (pts.length === 0) return null
-        return {
-          id: m.sid,
-          tx: pts.reduce((s, t) => s + t.tx, 0) / pts.length,
-          ty: pts.reduce((s, t) => s + t.ty, 0) / pts.length,
-          r: 52, // big collision radius — the topic pill is wide
-        }
-      })
-      .filter((t): t is Target => t !== null),
-  )
-
-  // Render: topic nodes + edges positioned from the LIVE sim positions. A
-  // conversation with no visible members simply isn't drawn.
-  const annotations = $derived.by(() =>
-    topicMembership
-      .map((m) => {
-        const pts = m.uris
-          .map((u) => placedByUri.get(displayNodeOf(u)))
-          .filter((p): p is NonNullable<typeof p> => p != null)
-        if (pts.length === 0) return null
-        const cx = pts.reduce((s, p) => s + p.px, 0) / pts.length
-        const cy = pts.reduce((s, p) => s + p.py, 0) / pts.length
-        const members = pts.map((p) => ({ uri: p.node.uri, x: p.px, y: p.py }))
-        return { id: m.id, sid: m.sid, label: m.label, color: m.color, cx, cy, uris: m.uris, members }
-      })
-      .filter((a): a is NonNullable<typeof a> => a !== null),
-  )
-  const topics = $derived(
-    annotations.map((a) => {
-      const p = positions.get(a.sid)
-      return { ...a, tx: p?.x ?? a.cx, ty: p?.y ?? a.cy }
-    }),
-  )
+  // POINTS SPIKE: topic hub nodes and their radiating edges are retired — every
+  // member wears its topic as a caption + tint instead (topicView above). No
+  // synthetic layout targets, no hub buttons, no spoke edges. The lost map
+  // verbs (click-to-reveal, D-to-dismiss-topic) can return on the captions if
+  // missed; the digest panel still has them.
+  const topicTargets = $derived.by<Target[]>(() => [])
+  const topics = $derived<
+    { id: string; sid: string; label: string; color: string; tx: number; ty: number; uris: string[]; members: { uri: string; x: number; y: number }[] }[]
+  >([])
 
   // The OP a reply should be represented by: its thread root if we've loaded it,
   // else the highest ancestor we DO have (climbing parent links), else the post
@@ -851,15 +1223,6 @@
     setHovered(uri)
   }
 
-  // Topic nodes are draggable layout nodes. A revealed pill is pinned, so
-  // dragging it moves its whole conversation (the solver anchors a group to
-  // its pinned member); an unrevealed pill moves alone. A plain click pins
-  // the topic where it is (like a post); it does NOT open every member's
-  // card. Threshold + window listeners mirror PostNode.
-  function togglePinUri(id: string) {
-    if (pinned.has(id)) pinned.delete(id)
-    else pinned.add(id)
-  }
   // Click a pill → reveal (or re-hide) ALL its member posts, even the ones the
   // node budget dropped, and pin the pill in place while revealed so it doesn't
   // drift as its posts flow in. Drag still repositions it.
@@ -945,6 +1308,30 @@
   // point offset perpendicular to the chord. The bow makes it unambiguous which
   // two nodes an edge joins even when a third node sits on the straight line
   // between them — the edge arcs clear of it rather than passing through.
+  // The midpoint of a card's edge nearest a target point — so an edge meets the
+  // card on its closest side (left / right / bottom / top middle) instead of one
+  // fixed side that a diagonal run would then cut across. In the tree the parent
+  // is above its reply, so "top" is naturally never chosen for a parent (nor
+  // "bottom" for a reply). Returns [x, y].
+  function edgeAnchor(px: number, py: number, hw: number, hh: number, tx: number, ty: number): [number, number] {
+    const cands: [number, number][] = [
+      [px, py - hh],
+      [px, py + hh],
+      [px - hw, py],
+      [px + hw, py],
+    ]
+    let best = cands[0]
+    let bd = Infinity
+    for (const c of cands) {
+      const dd = (c[0] - tx) ** 2 + (c[1] - ty) ** 2
+      if (dd < bd) {
+        bd = dd
+        best = c
+      }
+    }
+    return best
+  }
+
   function curvePath(x1: number, y1: number, x2: number, y2: number, frac = 0.24, cap = 50) {
     const dx = x2 - x1
     const dy = y2 - y1
@@ -955,28 +1342,104 @@
     return `M${x1.toFixed(1)},${y1.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`
   }
 
+  // POINTS SPIKE: reply structure ON DEMAND. At rest the scatter draws no reply
+  // edges — no permanent connectors dragging the eye between a reply and its
+  // far-off parent. Hovering (or keyboard-selecting) a post lights its
+  // conversation up: edges draw between the chain's members for exactly as long
+  // as you're looking. Reading a whole thread is the thread-view dialog's job.
+  const hoveredChain = $derived.by(() => {
+    if (!hovered) return new Set<string>()
+    for (const c of convos) {
+      if (c.members.some((m) => m.post.uri === hovered)) {
+        return new Set(c.members.map((m) => displayNodeOf(m.post.uri)))
+      }
+    }
+    return new Set<string>()
+  })
+  // Reply links involving lens guests: guest → its displayed parent, guest →
+  // guest, and lens member → guest (a gap in the loaded chain that the fetched
+  // thread fills). Only exist while the lens is open.
+  const lensEdges = $derived.by(() => {
+    if (!lensTree || guestNodes.length === 0) return []
+    const present = new Set(visibleUris)
+    const guestUris = new Set<string>()
+    for (const g of guestNodes) {
+      present.add(g.uri)
+      guestUris.add(g.uri)
+    }
+    const out: { id: string; from: string; to: string }[] = []
+    const link = (n: GraphNode) => {
+      const raw = parentUriOf(n.item)
+      const p = raw ? displayNodeOf(raw) : undefined
+      if (p && p !== n.uri && present.has(p)) out.push({ id: `${n.uri}->${p}`, from: n.uri, to: p })
+    }
+    for (const g of guestNodes) link(g)
+    // Members whose parent is a guest (visibleEdges only links visible parents).
+    for (const n of visibleNodes) {
+      const raw = parentUriOf(n.item)
+      const p = raw ? displayNodeOf(raw) : undefined
+      if (p && guestUris.has(p)) out.push({ id: `${n.uri}->${p}`, from: n.uri, to: p })
+    }
+    return out
+  })
+
+  // Edges are pure ANNOTATION now — position is decided by the axes alone, so a
+  // connector can't drag the layout around (the old objection to always-on
+  // edges). Always drawn; a long one is just a true fact about the thread. The
+  // hovered chain still gets its member rings on top (hoveredChain above).
   const edgeLines = $derived.by(() =>
-    visibleEdges
+    [...visibleEdges, ...lensEdges]
+      // With the lens open, draw ONLY the tree's internal edges (both endpoints
+      // kept). Everything else is exiled off-frame — a capped-out sibling, or a
+      // non-lens scatter node — so an edge to it would either dangle into the
+      // frame or waste a draw off it.
+      .filter((e) => !lensTree || (lensKeptUris.has(e.from) && lensKeptUris.has(e.to)))
       .map((e) => {
-        const a = placedByUri.get(e.from) // reply
+        const a = placedByUri.get(e.from) // reply (child)
         const b = placedByUri.get(e.to) // parent
         if (!a || !b) return null
-        const dx = b.px - a.px
-        const dy = b.py - a.py
-        const len = Math.hypot(dx, dy) || 1
-        const ux = dx / len
-        const uy = dy / len
-        return {
-          id: e.id,
-          from: e.from,
-          color: topicColorByNode.get(e.from) ?? '',
-          d: curvePath(
+        let d: string
+        if (lensTree) {
+          // Reader tree: the reply always emits from its TOP-centre ("this
+          // replies to something above"); only the PARENT target picks its
+          // nearest side, so the edge lands cleanly without biting across a card.
+          const hw = readerPill.w / 2
+          const ah = lensTree.get(e.from)?.hh ?? a.size / 2
+          const bh = lensTree.get(e.to)?.hh ?? b.size / 2
+          const sx = a.px
+          const sy = a.py - ah
+          const [ex, ey] = edgeAnchor(b.px, b.py, hw, bh, sx, sy)
+          // Nudge the arrowhead (parent) end a touch OUTSIDE the card edge.
+          const vx = ex - b.px
+          const vy = ey - b.py
+          const vl = Math.hypot(vx, vy) || 1
+          d = curvePath(sx, sy, ex + (vx / vl) * 4, ey + (vy / vl) * 4, settings.curvedEdges ? 0.14 : 0, 36)
+        } else {
+          // Scatter: no tree orientation, so trim radially toward the parent.
+          const dx = b.px - a.px
+          const dy = b.py - a.py
+          const len = Math.hypot(dx, dy) || 1
+          const ux = dx / len
+          const uy = dy / len
+          d = curvePath(
             a.px + ux * (a.size / 2),
             a.py + uy * (a.size / 2),
             b.px - ux * (b.size / 2 + 7),
             b.py - uy * (b.size / 2 + 7),
             settings.curvedEdges ? 0.24 : 0,
-          ),
+          )
+        }
+        return {
+          id: e.id,
+          from: e.from,
+          // Hovering any member of a conversation — or focusing it into the
+          // tree lens — brings ITS edges up to full strength; everything else
+          // stays a whisper (see .edges CSS).
+          lit:
+            (hoveredChain.size > 1 && (hoveredChain.has(e.from) || hoveredChain.has(e.to))) ||
+            (lensUris !== null && (lensUris.has(e.from) || lensUris.has(e.to))),
+          color: topicColorByNode.get(e.from) ?? '',
+          d,
         }
       })
       .filter((l): l is NonNullable<typeof l> => l !== null),
@@ -989,8 +1452,17 @@
   }
 
   function cardPos(p: { px: number; py: number; size: number }) {
-    let x = p.px + p.size / 2 + 12
-    if (x + CARD_W > w) x = p.px - p.size / 2 - 12 - CARD_W
+    // In pill mode the node is far wider than its avatar, so offsetting by the
+    // avatar radius (p.size/2) lands the card ON the pill. Clear the pill's own
+    // edge (pill.w/2) instead, so the card always sits beside it, not over it.
+    const halfW = pill ? pill.w / 2 : p.size / 2
+    // A tight gap: enough to read as separate from the node, small enough that
+    // the pointer can't linger in the dead zone between them and lose the hover
+    // (the grace-window re-check bridges only a brief crossing). Was 12 → a
+    // pausable strip beside wide pills.
+    const gap = 4
+    let x = p.px + halfW + gap
+    if (x + CARD_W > w) x = p.px - halfW - gap - CARD_W
     if (x < 8) x = 8
     // y is just an anchor; the card clamps its own top by its measured height.
     const y = Math.max(8, p.py - p.size / 2)
@@ -1006,6 +1478,9 @@
     for (const uri of uris) {
       const p = placedByUri.get(uri)
       if (!p) continue
+      // A lens card IS already a full PostCard — don't pop another over it on
+      // hover. (Pinned posts, e.g. from the digest panel, still pop.)
+      if (lensUris?.has(uri) && !pinned.has(uri)) continue
       const { x, y } = cardPos(p)
       out.push({ node: p.node, x, y })
     }
@@ -1168,12 +1643,51 @@
     return () => cancelAnimationFrame(tweenRaf)
   })
 
-  // Re-solve whenever targets change (new data, resize, dismissal, turnover),
-  // or when the pinned set changes (pinned nodes hold their positions).
+  // Re-solve when targets change — EXCEPT on a pure shrink during a batch.
+  // Targets are frozen per batch, but the SOLVER's equilibrium is a function of
+  // the whole set: remove one post and everything it was pushing against settles
+  // back toward its own target — a small global reshuffle on every dismiss. So
+  // while the batch and frame are unchanged: a dismissal (ids only removed)
+  // skips the re-solve entirely (survivors hold their exact solved positions;
+  // the hole is the point), and newcomers (an expanded thread) are solved with
+  // every already-placed node HELD, so they land collision-free without moving
+  // anyone. A frame change (resize, digest panel, pill width) or a batch change
+  // (refill — the deliberate reflow moment) does a full solve as before.
+  let solvedFor = new Set<string>()
+  let solvedSig = ''
+  let solvedBatch: Set<string> | null = null
   $effect(() => {
-    const t = [...targets, ...topicTargets]
-    layout?.setCollision(pill ? pill.gap : null) // rectangles vs circles
-    layout?.setBounds(w, h, 18, Math.max(24, bottomChrome), bleed.x, bleed.y)
+    const t = [...focusTargets, ...topicTargets]
+    // Lens open → the reader cards need their own (larger) spacing; else the
+    // scatter's gap (pill mode) or circle collision (avatar mode).
+    layout?.setCollision(lensTree ? readerPill.gap : pill ? pill.gap : null)
+    // POINTS SPIKE: no reservoir bleed — the solver keeps everything inside the
+    // frame (targets are already frame-mapped), so nothing lands off-screen.
+    // EXCEPT while the lens is open: a huge bleed legalizes the exile ring so
+    // non-members can fly off-stage (clamped back on release).
+    const lensBleed = lensTree ? Math.ceil(Math.hypot(w, h) * 0.8) : 0
+    layout?.setBounds(w, h, 18, Math.max(24, bottomChrome), lensBleed, lensBleed)
+    // focusedThread and the guest count are part of the signature: entering/
+    // leaving the lens — and guests arriving after the fetch, or leaving when
+    // dismissed — re-solve everything (the whole tree re-lays around them) even
+    // though the freeze would otherwise ignore retargeting/newcomers.
+    const sig = `${w}|${h}|${bottomChrome}|${showDigest ? 1 : 0}|${pill ? pill.w : 0}|${focusedThread ?? ''}|g${guestNodes.length}|x${lensExpandTotal}|m${measuredSig}`
+    const ids = new Set(t.map((x) => x.id))
+    if (batch !== null && batch === solvedBatch && sig === solvedSig) {
+      const hasNew = t.some((x) => !solvedFor.has(x.id))
+      if (!hasNew) {
+        solvedFor = ids
+        return // pure shrink — freeze
+      }
+      const hold = new Set(pinned)
+      for (const id of solvedFor) if (ids.has(id)) hold.add(id)
+      solvedFor = ids
+      layout?.update(t, hold)
+      return
+    }
+    solvedBatch = batch
+    solvedSig = sig
+    solvedFor = ids
     layout?.update(t, new Set(pinned))
   })
 
@@ -1245,11 +1759,12 @@
     if (suspects.length) follows.verify(suspects)
   })
 
-  // Keep the graph full: when the queue runs dry (fewer posts loaded than the
-  // budget) and more can be fetched, pull the next page. This is what makes
-  // dismissing a post backfill the next one so the visible count holds steady.
+  // Stock the pool BETWEEN batches: when the plan can't fill the budget and more
+  // can be fetched, pull the next page. Gated to batch === null — during a batch
+  // the count only drains (that's the point), so fetching to top it up would
+  // page through the entire feed for posts the filter holds invisible anyway.
   $effect(() => {
-    if (!loading && cursor && total < budget) load(true)
+    if (!loading && cursor && total < budget && batch === null) load(true)
   })
 
   // Feed switch: when the user picks a different feed tab, clear the loaded feed
@@ -1263,6 +1778,7 @@
     items = []
     cursor = undefined
     turnoverOffset = 0
+    batch = null // new feed, new batch (the capture effect takes a fresh one)
     // A different feed's time span is unrelated to the frozen domain: drop it so
     // the next layout rebuilds from the new corpus rather than mapping every post
     // through a stale range (which can collapse them onto one column).
@@ -1405,11 +1921,6 @@
     window.open(bskyUrl(node.item), '_blank', 'noopener')
   }
 
-  function togglePin(node: GraphNode) {
-    if (pinned.has(node.uri)) pinned.delete(node.uri)
-    else pinned.add(node.uri)
-  }
-
   // Dragging a node holds it under the pointer (the sim flows around it).
   // Releasing lets it drift back to its semantic spot — unless it's pinned
   // (by a normal click), in which case it stays where it was dropped.
@@ -1437,7 +1948,7 @@
     view.k = 1
   }
 
-  const CHROME_SELECTOR = '.wrap, .card, .config-wrap, .hud, .panel, .digest-btn, .topic-node, .coverage'
+  const CHROME_SELECTOR = '.wrap, .card, .config-wrap, .hud, .panel, .digest-btn, .topic-node, .more-node, .coverage'
 
   function onWheel(e: WheelEvent) {
     if (!graphEl) return
@@ -1471,6 +1982,10 @@
   let pan: { sx: number; sy: number; vx: number; vy: number; moved: boolean } | null = null
   let pinch: { dist: number; mx: number; my: number; vx: number; vy: number; vk: number } | null = null
   let canvasRelease: (() => void) | null = null
+  // Did the current background gesture actually move (pan or pinch)? A still tap
+  // on the background releases the focus lens ("click anywhere else"); a drag —
+  // panning a large tree into view — or a pinch must NOT collapse it.
+  let bgMoved = false
 
   function canvasXY(e: PointerEvent) {
     const r = graphEl.getBoundingClientRect()
@@ -1498,11 +2013,15 @@
   function onCanvasPointerDown(e: PointerEvent) {
     if (e.button !== 0) return
     const t = e.target as HTMLElement
-    if (t.closest('.wrap, .card, .config-wrap, .hud, .panel, .digest-btn, .topic-node')) return
+    if (t.closest('.wrap, .card, .config-wrap, .hud, .panel, .digest-btn, .topic-node, .more-node')) return
     canvasPointers.set(e.pointerId, canvasXY(e))
     if (canvasPointers.size === 1) startPan()
-    else if (canvasPointers.size === 2) startPinch()
+    else if (canvasPointers.size === 2) {
+      startPinch()
+      bgMoved = true // a second finger means a pinch/zoom, never a release tap
+    }
     if (!canvasRelease) {
+      bgMoved = false // fresh background gesture — assume a tap until it moves
       window.addEventListener('pointermove', onCanvasMove)
       window.addEventListener('pointerup', onCanvasUp)
       window.addEventListener('pointercancel', onCanvasUp)
@@ -1537,12 +2056,14 @@
       view.x = mx - gx * k
       view.y = my - gy * k
       view.k = k
+      bgMoved = true
     } else if (pan && canvasPointers.size === 1) {
       const p = canvasPointers.get(e.pointerId)!
       const dx = p.x - pan.sx
       const dy = p.y - pan.sy
       if (!pan.moved && Math.hypot(dx, dy) < 4) return
       pan.moved = true
+      bgMoved = true
       view.x = pan.vx + dx
       view.y = pan.vy + dy
     }
@@ -1556,7 +2077,16 @@
     // jumping; 0 left → release the window listeners.
     if (canvasPointers.size >= 2) startPinch()
     else if (canvasPointers.size === 1) startPan()
-    else canvasRelease?.()
+    else {
+      // Whole background gesture ended. A still TAP is the "click anywhere else"
+      // that releases the focus lens; a pan (dragging a large tree into view) or
+      // pinch left bgMoved set, so the lens survives the gesture.
+      if (!bgMoved) {
+        focusedThread = null
+        focusedPost = null
+      }
+      canvasRelease?.()
+    }
   }
 
   $effect(() => () => canvasRelease?.())
@@ -1576,33 +2106,13 @@
     layout?.dragEnd(uri)
   }
 
-  // Expansion is keyed by the clicked post's own uri (stable as the group grows);
-  // buildGraph expands a conversation if any of its members' uri is in `expanded`.
-  // The fetch is scoped to the clicked post (its replies + its ancestor chain),
-  // not the whole root thread, so mapping stays about the post you clicked.
-  function toggleMapReplies(item: FeedItem) {
-    const uri = item.post.uri
-    if (expanded.has(uri)) {
-      expanded.delete(uri)
-      pinned.delete(uri) // release the anchor on un-map
-    } else {
-      expanded.add(uri)
-      // Anchor the newly-full conversation at the clicked post's CURRENT spot,
-      // exactly as revealing a topic pill does (pinned → #anchorHeldGroups shifts
-      // the whole tree's targets around it). Without this, the conversation lays
-      // its tidy-tree at its SEMANTIC position and flings the chain away from the
-      // click (#65). Un-map releases the pin.
-      pinned.add(uri)
-      threads.ensure(uri) // pull replies not already in the timeline
-    }
-  }
+  // Reader-lens era: "View thread" and the +N badge both OPEN THE LENS (see
+  // onexpand / onmapreplies → focusChain). The old inline-expand path added the
+  // clicked uri to `expanded`, but the one-hop scatter filter now strips the
+  // revealed replies straight back out (they're children, and the filter only
+  // keeps a post + its immediate parent) — so it revealed nothing. Gone.
   function repliesMapped(item: FeedItem): boolean {
-    // Must mirror toggleMapReplies' own condition (expanded.has), or the button
-    // LABEL and its ACTION disagree. Reading the graph node's `expanded` flag was
-    // the bug: buildGraph sets it true for planner-selected 'full' posts the user
-    // never mapped, so the button read "Hide replies" while clicking it SHOWED
-    // them (the click hit the `else`/add branch). (#52)
-    return expanded.has(item.post.uri)
+    return expanded.has(item.post.uri) // still set by topic-pill reveal
   }
 
   // Why a post is in the graph, shown on its card. Pulled-in context always
@@ -1665,8 +2175,31 @@
     undoLast = null
   }
 
+  // In the thread lens, dismissing ANY post dismisses the WHOLE thread — you've
+  // read the conversation and you're done with it, not just one branch. Covers
+  // every candidate (members + guests + their subtrees), arms one undo, and
+  // closes the lens.
+  function dismissThread(): string[] {
+    const pack = lensPack
+    if (!pack) return []
+    const all = new Set<string>()
+    for (const uri of pack.cand.keys()) {
+      all.add(uri)
+      for (const d of threadDescendants(allItems, uri)) all.add(d)
+    }
+    const added = [...all].filter((u) => !read.isDismissed(u))
+    read.dismissMany([...all])
+    if (hovered && all.has(hovered)) hovered = null
+    if (added.length) armUndo({ kind: 'dismiss', uris: added })
+    focusedThread = null
+    focusedPost = null
+    return added
+  }
+
   // Returns the URIs this call actually newly-dismissed (for undo capture).
   function dismiss(uri: string): string[] {
+    // In the lens, any dismiss takes the whole thread (see dismissThread).
+    if (focusedThread && lensKeptUris.has(uri)) return dismissThread()
     // Dismiss the post and every reply hanging off it — "I'm done with this
     // thread". (With chains always drawn, single-post dismissal would just
     // ghost the node in place, since its own replies keep it needed — d would
@@ -1710,6 +2243,15 @@
     armUndo({ kind: 'react', uris: added, target: uri, reaction: kind, prevReaction })
   }
 
+  // Rate WITHOUT dismissing — for the reader lens, where dismissing a post you're
+  // reading would collapse the thread out from under you. Marks the private thumb
+  // (badge shows) and leaves the card in place; the ✕ is there to dismiss on
+  // purpose. Deliberately no undo arm: it's non-destructive (re-rate to change).
+  function rateOnly(uri: string, kind: ReactionKind) {
+    const did = contextByUri.get(uri)?.post.author.did
+    if (did) reactions.react(uri, did, kind)
+  }
+
   // Dismiss a whole conversation from its topic node: every member post (plus
   // reply subtrees) is marked read at once.
   function dismissTopic(convoId: string) {
@@ -1751,11 +2293,43 @@
       setHovered(node.uri)
       return
     }
-    clickTimer = setTimeout(() => togglePin(node), 220)
+    // POINTS SPIKE: click-to-pin is retired (temporarily) — a click now ONLY
+    // drives the focus lens, so after gathering a thread you're free to hover
+    // across its members without the clicked post's card frozen over the tree.
+    // Cards live on hover (and on pins made elsewhere, e.g. the digest panel).
+    clickTimer = setTimeout(() => focusChain(node.uri), 220)
   }
   function onNodeDblClick(node: GraphNode) {
     clearTimeout(clickTimer)
     open(node)
+  }
+
+  // Click a chain member → focus its conversation (the tidy-tree lens); click a
+  // chainless post → release any focus. Clicking anything already inside the
+  // lens (a member OR a fetched guest — guests belong to no batch conversation,
+  // so the lookup below would wrongly release) keeps it open.
+  function focusChain(uri: string) {
+    if (lensUris?.has(uri)) return
+    const it = nodeByUri.get(uri)?.item ?? contextByUri.get(uri)
+    let c = convos.find((c) => c.members.some((m) => m.post.uri === uri))
+    // A DISMISSED post (a dimmed ghost) isn't in `convos` (built from the
+    // non-dismissed `visible`), so clicking it found nothing and the lens never
+    // opened — you had to click a live node in the chain. Fall back to matching by
+    // thread root: the ghost's live descendants ARE in a conversation.
+    if (!c && it) {
+      const root = rootUriOf(it)
+      c = convos.find((cv) => rootUriOf(cv.members[0]) === root)
+    }
+    // Open the lens for any post that's part of a thread: a conversation already
+    // showing ≥2 members, a post that HAS replies (drawn or not — the fetch pulls
+    // them in), OR a REPLY itself (part of a chain going up, even when its own
+    // convo shows just it — a leaf whose parent/siblings are dismissed or unloaded).
+    const hasReplies = (contextByUri.get(uri)?.post.replyCount ?? 0) > 0
+    const isReply = !!(it && parentUriOf(it))
+    const next = c && (c.members.length > 1 || hasReplies || isReply) ? c.id : null
+    if (next !== focusedThread) lensExpanded.clear() // a fresh thread starts capped
+    focusedThread = next
+    focusedPost = next ? uri : null // its branch is always kept when capping
   }
 
   function nextBatch() {
@@ -1809,6 +2383,13 @@
   // rate, dismiss, and hand the selection to the next survivor so the sweep flows
   // post→post without reaching for the mouse.
   function rateAndAdvance(uri: string, kind: ReactionKind) {
+    // In the reader lens, rating MARKS only (like the inline arrows) — it doesn't
+    // dismiss, which here would take the whole thread out from under you as you
+    // read it. Only an explicit dismiss (d / ✕) closes the thread.
+    if (focusedThread && lensKeptUris.has(uri)) {
+      rateOnly(uri, kind)
+      return
+    }
     const next = nextSurvivor(uri)
     react(uri, kind)
     if (next) keyboardSelect(next)
@@ -1909,10 +2490,17 @@
     if (ptr.x < 0 || !graphEl) return false
     // Scoped to THIS graph. Matching '.card' against the whole document also
     // matched the login card, so after a session expiry the timer kept finding
-    // one and re-arming against a component that no longer exists.
+    // one and re-arming against a component that no longer exists. The profile /
+    // ⋯ popovers are the exception: they're PORTALED to <body> (outside graphEl)
+    // so `fixed` escapes the pan/zoom transform — reaching onto one must still
+    // keep the card alive, so match them ungated by graphEl.
     return document
       .elementsFromPoint(ptr.x, ptr.y)
-      .some((el) => graphEl.contains(el) && el.closest('.wrap, .card, .profile-pop'))
+      .some(
+        (el) =>
+          (graphEl.contains(el) && el.closest('.wrap, .card')) ||
+          el.closest('.profile-pop, .menu.floating'),
+      )
   }
   function scheduleClear() {
     clearTimeout(clearTimer)
@@ -2009,7 +2597,7 @@
     // Double-click empty canvas to come home. On a node it means something else
     // already (map replies), so only the background answers.
     const t = e.target as HTMLElement
-    if (!t.closest('.wrap, .card, .config-wrap, .hud, .panel, .digest-btn, .topic-node')) recentre()
+    if (!t.closest('.wrap, .card, .config-wrap, .hud, .panel, .digest-btn, .topic-node, .more-node')) recentre()
   }}
   onclickcapture={(e) => {
     // A click on empty canvas (not a node, card, panel, or control) collapses
@@ -2017,7 +2605,7 @@
     const t = e.target as HTMLElement
     // Click outside the config popover closes it (the gear's own click toggles).
     if (showConfig && !t.closest('.config-wrap')) showConfig = false
-    if (!t.closest('.wrap, .card, .config-wrap, .hud, .panel, .digest-btn, .topic-node')) clearAll()
+    if (!t.closest('.wrap, .card, .config-wrap, .hud, .panel, .digest-btn, .topic-node, .more-node')) clearAll()
   }}
 >
   <div class="axis y-axis">← quieter · louder →</div>
@@ -2050,10 +2638,24 @@
     {#each edgeLines as line (line.id)}
       <path
         d={line.d}
+        class:lit={line.lit}
         fill="none"
         marker-end="url(#{arrowId(line.color)})"
-        style={line.color ? `stroke: ${line.color}; opacity: 0.55` : ''}
+        style={line.color ? `stroke: ${line.color};` : ''}
       />
+    {/each}
+    <!-- Faint connector from a capped post's nearest edge to its "+K more" node
+         (not from its centre, so it doesn't run behind the card). -->
+    {#each overflowPlaced as o (o.id)}
+      {@const par = placedByUri.get(o.parent)}
+      {#if par}
+        {@const anc = edgeAnchor(par.px, par.py, readerPill.w / 2, lensTree?.get(o.parent)?.hh ?? 0, o.px, o.py - 15)}
+        <path
+          class="more-edge"
+          d={curvePath(o.px, o.py - 15, anc[0], anc[1], settings.curvedEdges ? 0.14 : 0, 30)}
+          fill="none"
+        />
+      {/if}
     {/each}
   </svg>
 
@@ -2077,10 +2679,13 @@
       py={p.py}
       size={p.size}
       {pill}
+      reader={readerBoxByUri.get(p.node.uri)}
       arriving={arriving.has(p.node.uri)}
       enter={enterFrom(p.px, p.py)}
       hasReplies={(edgeCount.get(p.node.uri) ?? 0) > 0}
       active={hovered === p.node.uri}
+      related={hovered !== p.node.uri &&
+        ((hoveredChain.size > 1 && hoveredChain.has(p.node.uri)) || (lensUris?.has(p.node.uri) ?? false))}
       pinned={pinned.has(p.node.uri)}
       ghost={p.node.ghost ?? false}
       reaction={reactions.reactionOf(p.node.uri)}
@@ -2090,10 +2695,14 @@
       onhover={pointerHover}
       onclick={onNodeClick}
       ondblclick={onNodeDblClick}
-      onexpand={(n) => toggleMapReplies(n.item)}
+      onexpand={(n) => focusChain(n.uri)}
       ondismiss={dismiss}
       ondragmove={onNodeDrag}
       ondragend={onNodeDragEnd}
+      onreply={(it) => compose.openReply(it)}
+      onquote={(it) => compose.openQuote(it)}
+      onrate={rateOnly}
+      onmeasure={measureCard}
     />
   {/each}
 
@@ -2104,12 +2713,14 @@
        diameter, which in pill mode is unrelated to how tall the node is. -->
   {#each placed as p (p.node.uri)}
     {@const cap = nodeCaptions.get(p.node.uri)}
-    {@const half = pill ? pill.h / 2 : p.size / 2}
+    {@const rb = readerBoxByUri.get(p.node.uri)}
+    {@const above = !!rb || !!pill}
+    {@const half = rb ? rb.h / 2 : pill ? pill.h / 2 : p.size / 2}
     {#if cap}
       <div
         class="node-caption"
-        class:above={!!pill}
-        style="left: {p.px}px; top: {pill ? p.py - half - 3 : p.py + half + 3}px; --c: {cap.color}"
+        class:above
+        style="left: {p.px}px; top: {above ? p.py - half - 3 : p.py + half + 3}px; --c: {cap.color}"
       >
         {cap.label}
       </div>
@@ -2128,6 +2739,20 @@
       onpointerdown={(e) => onTopicPointerDown(e, a.sid, a.id)}
     >
       {a.label}<span class="topic-count">{a.uris.length}</span>
+    </button>
+  {/each}
+
+  <!-- Sibling-cap overflow: a small node under a post whose replies were capped.
+       Click to draw the next few of that post's replies (LENS_SIBLING_STEP more). -->
+  {#each overflowPlaced as o (o.id)}
+    <button
+      class="more-node"
+      style="left: {o.px}px; top: {o.py}px"
+      title="Show {Math.min(o.count, LENS_SIBLING_STEP)} more of {o.count} {o.count === 1 ? 'reply' : 'replies'}"
+      onclick={() => lensExpanded.set(o.parent, (lensExpanded.get(o.parent) ?? LENS_SIBLING_CAP) + LENS_SIBLING_STEP)}
+      onpointerdown={(e) => e.stopPropagation()}
+    >
+      +{o.count} more
     </button>
   {/each}
 
@@ -2153,7 +2778,7 @@
       context={whyHere(c.node)}
       onreply={(it) => compose.openReply(it)}
       onquote={(it) => compose.openQuote(it)}
-      onmapreplies={toggleMapReplies}
+      onmapreplies={(it) => focusChain(it.post.uri)}
       onswipe={onCardSwipe}
       onrate={(it, kind) => react(it.post.uri, kind)}
       showClose={coarsePointer}
@@ -2267,14 +2892,10 @@
           <input type="checkbox" bind:checked={settings.connectReplies} />
           <span class="val"></span>
         </div>
-        <p class="hint">Bring in the posts replies are replying to, drawing edges.</p>
-
-        <div class="row">
-          <span class="label">Reply chains</span>
-          <input type="checkbox" bind:checked={settings.replyChains} />
-          <span class="val"></span>
-        </div>
-        <p class="hint">Show each reply's full parent chain to the thread root (won't collapse those threads).</p>
+        <p class="hint">
+          Draw an edge from each post to the one it replies to. The full thread is in the thread
+          view — click a post to open it.
+        </p>
 
         <div class="row">
           <span class="label">Curved edges</span>
@@ -2482,6 +3103,27 @@
   .topic-node:hover {
     background: color-mix(in srgb, var(--c) 22%, var(--bg-elev));
   }
+  /* Sibling-cap overflow marker: a small pill under a capped post, click to
+     draw the rest of its replies. Positioned centre-on-point like a node. */
+  .more-node {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    padding: 3px 10px;
+    font-size: 0.66rem;
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--text-dim);
+    background: color-mix(in srgb, var(--bg-elev) 92%, transparent);
+    border: 1px dashed var(--border);
+    border-radius: 999px;
+    cursor: pointer;
+    white-space: nowrap;
+    z-index: 3;
+  }
+  .more-node:hover {
+    color: var(--text);
+    border-color: var(--accent);
+  }
   /* A one-off topic's label, centered just beneath its post node. */
   .node-caption {
     position: absolute;
@@ -2527,8 +3169,21 @@
     fill: none;
     stroke: var(--text-dim);
     stroke-width: 2;
-    opacity: 0.7;
+    /* At rest an edge is a WHISPER — enough to see that a thread exists without
+       the connectors dominating the scatter. Hovering any member of a
+       conversation lifts its edges to full strength (.lit). */
+    opacity: 0.18;
     stroke-dasharray: 5 4;
+    transition: opacity 140ms ease;
+  }
+  .edges path.lit {
+    opacity: 0.95;
+  }
+  /* Sibling-cap connector: fainter and finer than a reply edge, no arrowhead. */
+  .edges path.more-edge {
+    stroke-width: 1.5;
+    opacity: 0.4;
+    stroke-dasharray: 2 3;
   }
   /* Arrowheads: default gray; colored markers carry an inline fill that must
      win, so keep this on the low-specificity default only. */

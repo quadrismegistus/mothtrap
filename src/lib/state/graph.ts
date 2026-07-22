@@ -312,7 +312,7 @@ function timeRank(d: TimeDomain, v: number): number {
  * two still sliced. Whatever is slicing them is not tail width, and 0.25 is the
  * better setting on both axes.
  */
-const NEW_TAIL = 0.25
+export const NEW_TAIL = 0.25
 
 /**
  * Positions with x frozen against `domain` and y/size ranked live over `corpus`.
@@ -390,6 +390,13 @@ export interface TreeNode {
   x: number
   y: number
   sizeRank: number
+  /** Optional per-node card height in px (reader lens). When set, rows stack by
+   * real pixel span so cards can vary in height; when absent every node is the
+   * uniform pill.h / maxSize and the layout is exactly as before. */
+  height?: number
+  /** A small node (e.g. a "+K more" marker) that reserves a narrow column in the
+   * compaction pass rather than a full card width. */
+  slim?: boolean
 }
 export interface TreeLayoutBox {
   padX: number
@@ -456,6 +463,13 @@ export function treeTargets(nodes: TreeNode[], box: TreeLayoutBox): TreeTarget[]
     }
   }
 
+  // A node's own card height, and the vertical gap between stacked cards. When a
+  // node carries no explicit height it's the uniform footprint (pill.h or an
+  // avatar's maxSize), so hOf-based stacking below reproduces the old Y_UNIT
+  // layout exactly; a reader-lens node supplies its text-sized height instead.
+  const GAP_Y = pill ? pill.gap.y : 30
+  const hOf = (uri: string) => byUri.get(uri)?.height ?? (pill ? pill.h : maxSize)
+
   // How many columns a sibling fan may span before wrapping. A fan of nine
   // laid out as ONE row spans ~2200px in pill mode — wider than any frame —
   // so the solver's "too large to fit, leave it" branch fired and the row sat
@@ -521,13 +535,19 @@ export function treeTargets(nodes: TreeNode[], box: TreeLayoutBox): TreeTarget[]
   // A subtree's width is its WIDEST row (not the sum of its children), so
   // wrapping propagates upward: a wrapped fan takes less horizontal room, and
   // its grandparent spreads its own children accordingly.
+  // A slim node (a "+K more" marker) reserves a fraction of a column, so it
+  // doesn't strand itself in a full card-width of empty space. SLIM_HW is its
+  // collision half-width — it must match the fraction, or the solver keeps a
+  // full card gap around a ~92px pill and shoves its siblings out of the block.
+  const SLIM_W = 0.35
+  const SLIM_HW = 46
   const widths = new Map<string, number>()
   const widthOf = (uri: string, guard: Set<string>): number => {
     const memo = widths.get(uri)
     if (memo !== undefined) return memo
     if (guard.has(uri)) return 1
     guard.add(uri)
-    let w = 1
+    let w = byUri.get(uri)?.slim ? SLIM_W : 1
     for (const row of rowsOf(uri, guard)) {
       w = Math.max(
         w,
@@ -555,6 +575,25 @@ export function treeTargets(nodes: TreeNode[], box: TreeLayoutBox): TreeTarget[]
     return h
   }
 
+  // Subtree vertical span in PIXELS: from a node's centre down to the bottom
+  // edge of the deepest card beneath it. This is what stacks rows without
+  // overlap when cards vary in height (heightOf, above, is the row-count twin
+  // used only for the wrap budget). With uniform heights it equals the old
+  // heightOf * Y_UNIT progression exactly.
+  const spans = new Map<string, number>()
+  const spanDown = (uri: string): number => {
+    const memo = spans.get(uri)
+    if (memo !== undefined) return memo
+    spans.set(uri, hOf(uri) / 2) // cycle guard: temporary value while recursing
+    let down = hOf(uri) / 2
+    for (const row of rowsOf(uri, new Set())) {
+      const rowTopHalf = Math.max(...row.map((k) => hOf(k.uri) / 2))
+      down += GAP_Y + rowTopHalf + Math.max(...row.map((k) => spanDown(k.uri)))
+    }
+    spans.set(uri, down)
+    return down
+  }
+
   const off = new Map<string, { dx: number; dy: number }>()
   const nodeRoot = new Map<string, string>()
   const extent = new Map<string, { minDx: number; maxDx: number; maxDy: number }>()
@@ -566,19 +605,26 @@ export function treeTargets(nodes: TreeNode[], box: TreeLayoutBox): TreeTarget[]
     const e = extent.get(rootUri)!
     e.minDx = Math.min(e.minDx, dx)
     e.maxDx = Math.max(e.maxDx, dx)
-    e.maxDy = Math.max(e.maxDy, dy)
-    // Each row centres on its parent; when everything fits maxCols this is one
-    // row one unit down — byte-identical to the unwrapped layout.
-    let rowDy = dy + Y_UNIT
+    e.maxDy = Math.max(e.maxDy, dy) // centre-based, as before: the lens re-anchors
+    // its own tree top-centre, so the packer's bottom-edge clamp would be moot
+    // here and over-clamps a tall avatar chain for other callers (graph.test).
+    // Stack child rows by PIXEL span: each row sits below the actual bottom of
+    // the deepest card in the row above, so cards may vary in height (a short
+    // reply takes little room, a full-length post more). `down` tracks the
+    // distance from THIS node's centre to the current stacking floor. With
+    // uniform heights it reduces to the old one-row-per-Y_UNIT layout.
+    let down = hOf(uri) / 2 // start at the bottom edge of this node's own card
     for (const row of rowsOf(uri, new Set())) {
+      const rowTopHalf = Math.max(...row.map((k) => hOf(k.uri) / 2))
+      const rowCy = dy + down + GAP_Y + rowTopHalf // the row's shared centre line
       const total = row.reduce((sum, k) => sum + widthOf(k.uri, new Set()), 0)
       let cursor = -total / 2
       for (const k of row) {
         const w = widthOf(k.uri, new Set())
-        assign(k.uri, dx + (cursor + w / 2) * X_UNIT, rowDy, guard, rootUri)
+        assign(k.uri, dx + (cursor + w / 2) * X_UNIT, rowCy, guard, rootUri)
         cursor += w
       }
-      rowDy += Math.max(...row.map((k) => heightOf(k.uri, new Set()))) * Y_UNIT
+      down += GAP_Y + rowTopHalf + Math.max(...row.map((k) => spanDown(k.uri)))
     }
   }
   const assigned = new Set<string>()
@@ -647,7 +693,9 @@ export function treeTargets(nodes: TreeNode[], box: TreeLayoutBox): TreeTarget[]
       tx: rootX + o.dx,
       ty: rootY + o.dy,
       r: (minSize + n.sizeRank * (maxSize - minSize)) / 2, // size stays the node's own
-      ...(pill ? { hw: pill.w / 2, hh: pill.h / 2, group: rootUri } : {}),
+      ...(pill
+        ? { hw: byUri.get(n.uri)?.slim ? SLIM_HW : pill.w / 2, hh: hOf(n.uri) / 2, group: rootUri }
+        : {}),
     }
   })
 }

@@ -27,24 +27,31 @@
 
   interface Props {
     item: FeedItem
-    /** Anchor position (top-left) in container px. */
-    x: number
-    y: number
+    /** NODE MODE: render as a positioned graph node (in the reader lens) rather
+     * than a floating overlay — fills its container, scrolls internally, smaller
+     * font, no self-positioning / close / swipe / map-replies, and the popovers
+     * (profile hover, ⋯ menu) are suppressed (they need portaling out of the
+     * graph transform — a follow-up). Everything else — header, rich text, inline
+     * images/quotes/links, the action row — renders the same. */
+    node?: boolean
+    /** Anchor position (top-left) in container px. Overlay mode only. */
+    x?: number
+    y?: number
     /** Container height, so a tall card can be kept from clipping off the bottom. */
-    boundsH: number
-    canMapReplies: boolean
-    repliesMapped: boolean
+    boundsH?: number
+    canMapReplies?: boolean
+    repliesMapped?: boolean
     /** Why this post is in the graph (pulled-in context); undefined for timeline posts. */
     context?: string
     onreply: (item: FeedItem) => void
     onquote: (item: FeedItem) => void
-    onmapreplies: (item: FeedItem) => void
+    onmapreplies?: (item: FeedItem) => void
     /** Touch horizontal swipe on the card: -1 = previous post, +1 = next. */
-    onswipe: (uri: string, dir: -1 | 1) => void
+    onswipe?: (uri: string, dir: -1 | 1) => void
     /** Private thumbs (local-only) on the shown post. */
     onrate: (item: FeedItem, kind: 'up' | 'down') => void
-    onkeep: () => void
-    onleave: () => void
+    onkeep?: () => void
+    onleave?: () => void
     /** Touch: explicit close (hover-out doesn't exist there). */
     onclose?: () => void
     /** Touch: mark this post read and drop it from the graph — what the node's
@@ -61,11 +68,12 @@
   }
   let {
     item,
-    x,
-    y,
-    boundsH,
-    canMapReplies,
-    repliesMapped,
+    node = false,
+    x = 0,
+    y = 0,
+    boundsH = 0,
+    canMapReplies = false,
+    repliesMapped = false,
     context,
     onreply,
     onquote,
@@ -79,6 +87,19 @@
     showClose = false,
     run,
   }: Props = $props()
+
+  // Move an element to <body> so a position:fixed popover escapes the graph's
+  // pan/zoom transform — inside a `transform`, `fixed` is measured relative to the
+  // transformed ancestor, not the screen, so the popover lands hundreds of px off.
+  // Harmless in overlay mode (that card already renders untransformed).
+  function portal(el: HTMLElement) {
+    document.body.appendChild(el)
+    return {
+      destroy() {
+        if (el.parentNode) el.parentNode.removeChild(el)
+      },
+    }
+  }
 
   // One private up/down vote for the whole card (the shown post). Reactive so the
   // active arrow highlights on click and on a resurfaced ghost.
@@ -175,7 +196,7 @@
   const SWIPE_MAX_MS = 600
   let swipeStart: { id: number; x: number; y: number; t: number } | null = null
   function onCardPointerDown(e: PointerEvent) {
-    if (e.pointerType === 'mouse') return
+    if (node || e.pointerType === 'mouse') return // node mode: no prev/next swipe
     swipeStart = { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp }
     window.addEventListener('pointerup', onCardPointerUp)
     window.addEventListener('pointercancel', onCardPointerUp)
@@ -191,7 +212,7 @@
     const dy = e.clientY - s.y
     if (Math.abs(dx) < SWIPE_MIN || Math.abs(dx) < Math.abs(dy) * 1.8 || e.timeStamp - s.t > SWIPE_MAX_MS)
       return
-    onswipe(item.post.uri, dx < 0 ? -1 : 1) // swipe left → previous, right → next
+    onswipe?.(item.post.uri, dx < 0 ? -1 : 1) // swipe left → previous, right → next
   }
 
   function toggleReposter() {
@@ -322,7 +343,8 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="card"
-  style="left: {x}px; top: {top}px;"
+  class:node
+  style={node ? '' : `left: ${x}px; top: ${top}px;`}
   bind:clientHeight={cardH}
   onmouseenter={onkeep}
   onmouseleave={onleave}
@@ -343,6 +365,7 @@
           {#if showRtProfile}
             <div
               class="profile-pop"
+              use:portal
               style="left: {rtPop.left}px; top: {rtPop.top}px"
               bind:clientHeight={rtPopH}
               onmouseenter={enterRt}
@@ -404,6 +427,7 @@
       {#if showProfile}
         <div
           class="profile-pop"
+          use:portal
           style="left: {profilePop.left}px; top: {profilePop.top}px"
           bind:clientHeight={profilePopH}
           onmouseenter={enterAvatar}
@@ -522,8 +546,9 @@
 
   <!-- Actions sit with the post they act on: the head's bar directly under the
        head content, each run continuation with its own compact row — every post
-       in a run is a separate likeable/repliable target on Bluesky. -->
-  {@render actionRow(item, false)}
+       in a run is a separate likeable/repliable target on Bluesky. The head row
+       also carries the private up/down vote (one per card). -->
+  {@render actionRow(item, false, true)}
 
   {#if continuation.length}
     <div class="run-more">
@@ -565,39 +590,19 @@
     </div>
   {/if}
 
-  <!-- Foot row: Map replies (takes the width) + one private up/down vote for the
-       whole card (never sent to Bluesky; feeds the unfollow tally). A vote also
-       dismisses the post. -->
-  <div class="foot">
-    {#if canMapReplies}
-      <button class="map-replies" class:on={repliesMapped} onclick={() => onmapreplies(item)}>
-        {repliesMapped ? 'Hide replies' : `Map replies${item.post.replyCount ? ` (${item.post.replyCount})` : ''}`}
-      </button>
-    {/if}
-    <div class="votes">
-      <button
-        class="vote up"
-        class:on={myVote === 'up'}
-        title="Upvote — private, on-device only (feeds the unfollow tally); also dismisses"
-        aria-label="Upvote"
-        onclick={() => onrate(item, 'up')}
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5l7 11H5z" fill="currentColor" /></svg>
-      </button>
-      <button
-        class="vote down"
-        class:on={myVote === 'down'}
-        title="Downvote — private, on-device only (feeds the unfollow tally); also dismisses"
-        aria-label="Downvote"
-        onclick={() => onrate(item, 'down')}
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19l7-11H5z" fill="currentColor" /></svg>
+  <!-- Foot row: Map replies. The private up/down vote moved up onto the action
+       row (see actionRow's showVotes); the foot is only here when there's a
+       thread to map. -->
+  {#if canMapReplies && !node}
+    <div class="foot">
+      <button class="map-replies" class:on={repliesMapped} onclick={() => onmapreplies?.(item)}>
+        View thread{item.post.replyCount ? ` (${item.post.replyCount})` : ''}
       </button>
     </div>
-  </div>
+  {/if}
 </div>
 
-{#snippet actionRow(p: FeedItem, compact: boolean)}
+{#snippet actionRow(p: FeedItem, compact: boolean, showVotes = false)}
   {@const pLiked = interactions.liked(p)}
   {@const pReposted = interactions.reposted(p)}
   <div class="actions" class:compact>
@@ -661,6 +666,7 @@
       {#if moreMenuFor === p.post.uri}
         <div
           class="menu floating"
+          use:portal
           class:up={moreMenuUp}
           bind:clientHeight={moreMenuH}
           style="left: {moreMenuPos.left}px; top: {moreMenuPos.top}px;"
@@ -691,6 +697,29 @@
         </div>
       {/if}
     </div>
+
+    {#if showVotes}
+      <!-- Private up/down vote, now on the same row (was a separate foot row).
+           One per card; also dismisses. Never sent to Bluesky. -->
+      <button
+        class="act vote up"
+        class:on={myVote === 'up'}
+        title="Upvote — private, on-device only (feeds the unfollow tally); also dismisses"
+        aria-label="Upvote"
+        onclick={() => onrate(p, 'up')}
+      >
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5l7 11H5z" fill="currentColor" /></svg>
+      </button>
+      <button
+        class="act vote down"
+        class:on={myVote === 'down'}
+        title="Downvote — private, on-device only (feeds the unfollow tally); also dismisses"
+        aria-label="Downvote"
+        onclick={() => onrate(p, 'down')}
+      >
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19l7-11H5z" fill="currentColor" /></svg>
+      </button>
+    {/if}
   </div>
 
   {#if modError && !compact}<p class="mod-error">{modError}</p>{/if}
@@ -715,6 +744,40 @@
     border-radius: 12px;
     padding: 0.8rem 0.9rem;
     box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  }
+  /* NODE MODE: fill the graph-node wrapper, scroll internally, slightly smaller.
+     The wrapper (PostNode) owns position, the ring, and the dismiss ✕. */
+  .card.node {
+    position: relative;
+    z-index: auto;
+    width: 100%;
+    height: auto; /* size to content (measured back for the packer); scroll past the cap */
+    max-width: none;
+    max-height: 340px; /* keep in step with READER_MAX_H in Graph */
+    box-shadow: none;
+    border-radius: 14px;
+    padding: 0.5rem 0.6rem;
+    touch-action: pan-y; /* vertical touch scrolls a tall/overflowing card; the
+      graph pans elsewhere. (Swipe is already off in node mode via onCardPointerDown.) */
+  }
+  .card.node .text {
+    font-size: 0.82rem;
+    line-height: 1.35;
+    margin-bottom: 0.4rem;
+  }
+  .card.node .name {
+    font-size: 0.82rem;
+  }
+  .card.node .handle {
+    font-size: 0.72rem;
+  }
+  .card.node .head {
+    gap: 0.4rem;
+    margin-bottom: 0.35rem;
+  }
+  .card.node .avatar {
+    width: 28px;
+    height: 28px;
   }
   .repost {
     font-size: 0.72rem;
@@ -1054,41 +1117,21 @@
     padding: 0.4rem;
     color: var(--text-dim);
   }
-  /* Private up/down vote — arrows (SVG, so they take the active color), never
-     sent to Bluesky. A vote also dismisses the post. */
-  .votes {
-    display: flex;
-    gap: 0.35rem;
-    margin-left: auto; /* right-aligned even when there is no Map-replies button */
+  /* Private up/down vote — now inline on the action row (arrows take the active
+     color). Never sent to Bluesky; a vote also dismisses the post. */
+  .act.vote {
+    flex: none;
+    min-width: 2rem;
+    border: 1px solid transparent;
   }
-  .vote {
-    display: grid;
-    place-items: center;
-    width: 36px;
-    padding: 0;
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    color: var(--text-dim);
-    cursor: pointer;
-  }
-  .vote svg {
-    width: 18px;
-    height: 18px;
-    display: block;
-  }
-  .vote:hover {
-    background: var(--bg);
-    color: var(--text);
-  }
-  .vote.up.on {
-    border-color: #3fb950;
+  .act.vote.up.on {
     color: #3fb950;
+    border-color: #3fb950;
     background: rgba(63, 185, 80, 0.14);
   }
-  .vote.down.on {
-    border-color: var(--danger);
+  .act.vote.down.on {
     color: var(--danger);
+    border-color: var(--danger);
     background: rgba(229, 72, 77, 0.14);
   }
   .map-replies:hover {
