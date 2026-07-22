@@ -2301,22 +2301,23 @@
   // so the lookup below would wrongly release) keeps it open.
   function focusChain(uri: string) {
     if (lensUris?.has(uri)) return
+    const it = nodeByUri.get(uri)?.item ?? contextByUri.get(uri)
     let c = convos.find((c) => c.members.some((m) => m.post.uri === uri))
     // A DISMISSED post (a dimmed ghost) isn't in `convos` (built from the
     // non-dismissed `visible`), so clicking it found nothing and the lens never
     // opened — you had to click a live node in the chain. Fall back to matching by
     // thread root: the ghost's live descendants ARE in a conversation.
-    if (!c) {
-      const it = nodeByUri.get(uri)?.item ?? contextByUri.get(uri)
-      const root = it ? rootUriOf(it) : undefined
-      if (root) c = convos.find((cv) => rootUriOf(cv.members[0]) === root)
+    if (!c && it) {
+      const root = rootUriOf(it)
+      c = convos.find((cv) => rootUriOf(cv.members[0]) === root)
     }
-    // Focus any thread worth drawing as a tree: a conversation already showing
-    // ≥2 members, OR a lone post that HAS replies we simply haven't drawn — the
-    // lens fetch pulls its whole tree in as guests, the same way a multi-member
-    // conversation's unseen siblings arrive. A post with no replies stays inert.
+    // Open the lens for any post that's part of a thread: a conversation already
+    // showing ≥2 members, a post that HAS replies (drawn or not — the fetch pulls
+    // them in), OR a REPLY itself (part of a chain going up, even when its own
+    // convo shows just it — a leaf whose parent/siblings are dismissed or unloaded).
     const hasReplies = (contextByUri.get(uri)?.post.replyCount ?? 0) > 0
-    const next = c && (c.members.length > 1 || hasReplies) ? c.id : null
+    const isReply = !!(it && parentUriOf(it))
+    const next = c && (c.members.length > 1 || hasReplies || isReply) ? c.id : null
     if (next !== focusedThread) lensExpanded.clear() // a fresh thread starts capped
     focusedThread = next
     focusedPost = next ? uri : null // its branch is always kept when capping

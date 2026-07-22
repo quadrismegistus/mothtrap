@@ -88,6 +88,19 @@
     run,
   }: Props = $props()
 
+  // Move an element to <body> so a position:fixed popover escapes the graph's
+  // pan/zoom transform — inside a `transform`, `fixed` is measured relative to the
+  // transformed ancestor, not the screen, so the popover lands hundreds of px off.
+  // Harmless in overlay mode (that card already renders untransformed).
+  function portal(el: HTMLElement) {
+    document.body.appendChild(el)
+    return {
+      destroy() {
+        if (el.parentNode) el.parentNode.removeChild(el)
+      },
+    }
+  }
+
   // One private up/down vote for the whole card (the shown post). Reactive so the
   // active arrow highlights on click and on a resurfaced ghost.
   const myVote = $derived(reactions.reactionOf(item.post.uri))
@@ -143,7 +156,7 @@
   const rtPop = $derived(popPos(rtAnchor, rtPopH))
 
   function enterRt(e: MouseEvent) {
-    if (node || !rtAuthor) return // node mode: no profile popover (needs portaling)
+    if (!rtAuthor) return
     clearTimeout(rtHoverTimer)
     // Already open (the pointer crossed onto the popover, which runs this same
     // handler) — hold it; don't re-delay or re-anchor.
@@ -302,7 +315,6 @@
   const profilePop = $derived(popPos(profileAnchor, profilePopH))
 
   function enterAvatar(e: MouseEvent) {
-    if (node) return // node mode: no profile popover (needs portaling out of the transform)
     clearTimeout(hoverTimer)
     if (showProfile) return // already open (pointer moved onto the popover) — hold it
     clearTimeout(profileOpenTimer)
@@ -353,6 +365,7 @@
           {#if showRtProfile}
             <div
               class="profile-pop"
+              use:portal
               style="left: {rtPop.left}px; top: {rtPop.top}px"
               bind:clientHeight={rtPopH}
               onmouseenter={enterRt}
@@ -411,9 +424,10 @@
       {:else}
         <div class="avatar avatar-blank"></div>
       {/if}
-      {#if showProfile && !node}
+      {#if showProfile}
         <div
           class="profile-pop"
+          use:portal
           style="left: {profilePop.left}px; top: {profilePop.top}px"
           bind:clientHeight={profilePopH}
           onmouseenter={enterAvatar}
@@ -642,18 +656,17 @@
       <span>{interactions.likeCount(p)}</span>
     </button>
 
-    <!-- ⋯ menu is a fixed-position popover; in node mode it lands wrong inside
-         the graph transform, so hide it until it's portaled (a follow-up). -->
-    <div class="more-wrap" class:hidden={node}>
+    <div class="more-wrap">
       <button
         class="act more"
         title="Report, mute or block"
         aria-label="More actions"
         onclick={(e) => toggleMore(e, p.post.uri)}>⋯</button
       >
-      {#if moreMenuFor === p.post.uri && !node}
+      {#if moreMenuFor === p.post.uri}
         <div
           class="menu floating"
+          use:portal
           class:up={moreMenuUp}
           bind:clientHeight={moreMenuH}
           style="left: {moreMenuPos.left}px; top: {moreMenuPos.top}px;"
@@ -764,9 +777,6 @@
   .card.node .avatar {
     width: 28px;
     height: 28px;
-  }
-  .more-wrap.hidden {
-    display: none;
   }
   .repost {
     font-size: 0.72rem;
