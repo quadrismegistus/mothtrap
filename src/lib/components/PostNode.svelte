@@ -524,19 +524,46 @@
      without hovering. Rectangular (not a capsule), avatar top-left, text
      filling the box and clamping where a rare long post overruns. These rules
      follow .wrap.pill (equal specificity) so they win on source order. */
-  /* Reader card is a column: avatar+text on top, the action row at the bottom. */
+  /* Reader card: the WRAP is the visual card (border, bg, rounded corners) so the
+     action row sits INSIDE it, below the text. The .node just holds avatar+text
+     and goes transparent/borderless; its state rings move to the wrap. */
   .wrap.reader {
     display: flex;
     flex-direction: column;
+    box-sizing: border-box;
+    background: var(--bg-elev);
+    border: 2px solid var(--accent-topic, var(--border));
+    border-radius: 14px;
   }
   .wrap.reader .node {
     align-items: flex-start;
     gap: 8px;
     padding: 9px 11px 7px;
-    border-radius: 14px;
+    border: none;
+    background: transparent;
+    border-radius: 0;
+    box-shadow: none;
     height: auto;
     flex: 1 1 auto;
     min-height: 0;
+  }
+  .wrap.reader.thread {
+    border-color: var(--accent-topic, var(--accent));
+  }
+  .wrap.reader:hover {
+    border-color: var(--accent-topic, var(--accent-hover));
+  }
+  .wrap.reader.related {
+    border-color: var(--accent-topic, rgba(255, 255, 255, 0.75));
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-topic, rgba(255, 255, 255, 0.45));
+  }
+  .wrap.reader.pinned {
+    border-color: #e0a838;
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px #e0a838;
+  }
+  .wrap.reader.active {
+    border-color: #ffcf4a;
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 5px #ffcf4a;
   }
   .wrap.reader .face {
     flex: 0 0 30px;

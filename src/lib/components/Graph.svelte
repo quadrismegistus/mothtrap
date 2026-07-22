@@ -126,9 +126,11 @@
   // its own content). Fixed-full first, so the reading itself can be judged.
   const READER_H = 208
   const readerPill = $derived({
-    w: Math.round(Math.min(360, Math.max(220, w - 40))),
+    // Narrower than a "one-line-per-post" card: text wraps to more lines, so a
+    // card reads a bit taller and less wide (a calmer column in the tree).
+    w: Math.round(Math.min(288, Math.max(208, w - 40))),
     h: READER_H,
-    gap: { x: 24, y: 18 },
+    gap: { x: 22, y: 18 },
   })
   // VARIABLE height: estimate a reader card's height from its text so the packer
   // can give a short reply a short card and a full post a tall one. A cheap
@@ -809,8 +811,11 @@
       if (n) push(n)
     }
     // Overflow markers ride the tree as small nodes hung under their parent.
+    // Infinity timestamp sorts them LAST (far right) among the siblings — "…and
+    // N more" belongs at the end of the row, not interleaved by time. (Infinity
+    // is non-finite, so treeTargets' anchor summary skips it — no rank skew.)
     for (const o of overflow) {
-      chainNodes.push({ uri: o.id, timestamp: o.timestamp, parent: o.parent, x: 0.5, y: 0.5, sizeRank: 0.15, height: 30 })
+      chainNodes.push({ uri: o.id, timestamp: Infinity, parent: o.parent, x: 0.5, y: 0.5, sizeRank: 0.15, height: 30 })
     }
     if (chainNodes.length < 2) return null
     const panelW = showDigest ? Math.min(PANEL_W, w * 0.88) : 0
