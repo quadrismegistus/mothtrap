@@ -27,24 +27,31 @@
 
   interface Props {
     item: FeedItem
-    /** Anchor position (top-left) in container px. */
-    x: number
-    y: number
+    /** NODE MODE: render as a positioned graph node (in the reader lens) rather
+     * than a floating overlay — fills its container, scrolls internally, smaller
+     * font, no self-positioning / close / swipe / map-replies, and the popovers
+     * (profile hover, ⋯ menu) are suppressed (they need portaling out of the
+     * graph transform — a follow-up). Everything else — header, rich text, inline
+     * images/quotes/links, the action row — renders the same. */
+    node?: boolean
+    /** Anchor position (top-left) in container px. Overlay mode only. */
+    x?: number
+    y?: number
     /** Container height, so a tall card can be kept from clipping off the bottom. */
-    boundsH: number
-    canMapReplies: boolean
-    repliesMapped: boolean
+    boundsH?: number
+    canMapReplies?: boolean
+    repliesMapped?: boolean
     /** Why this post is in the graph (pulled-in context); undefined for timeline posts. */
     context?: string
     onreply: (item: FeedItem) => void
     onquote: (item: FeedItem) => void
-    onmapreplies: (item: FeedItem) => void
+    onmapreplies?: (item: FeedItem) => void
     /** Touch horizontal swipe on the card: -1 = previous post, +1 = next. */
-    onswipe: (uri: string, dir: -1 | 1) => void
+    onswipe?: (uri: string, dir: -1 | 1) => void
     /** Private thumbs (local-only) on the shown post. */
     onrate: (item: FeedItem, kind: 'up' | 'down') => void
-    onkeep: () => void
-    onleave: () => void
+    onkeep?: () => void
+    onleave?: () => void
     /** Touch: explicit close (hover-out doesn't exist there). */
     onclose?: () => void
     /** Touch: mark this post read and drop it from the graph — what the node's
@@ -61,11 +68,12 @@
   }
   let {
     item,
-    x,
-    y,
-    boundsH,
-    canMapReplies,
-    repliesMapped,
+    node = false,
+    x = 0,
+    y = 0,
+    boundsH = 0,
+    canMapReplies = false,
+    repliesMapped = false,
     context,
     onreply,
     onquote,
@@ -135,7 +143,7 @@
   const rtPop = $derived(popPos(rtAnchor, rtPopH))
 
   function enterRt(e: MouseEvent) {
-    if (!rtAuthor) return
+    if (node || !rtAuthor) return // node mode: no profile popover (needs portaling)
     clearTimeout(rtHoverTimer)
     // Already open (the pointer crossed onto the popover, which runs this same
     // handler) — hold it; don't re-delay or re-anchor.
@@ -175,7 +183,7 @@
   const SWIPE_MAX_MS = 600
   let swipeStart: { id: number; x: number; y: number; t: number } | null = null
   function onCardPointerDown(e: PointerEvent) {
-    if (e.pointerType === 'mouse') return
+    if (node || e.pointerType === 'mouse') return // node mode: no prev/next swipe
     swipeStart = { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp }
     window.addEventListener('pointerup', onCardPointerUp)
     window.addEventListener('pointercancel', onCardPointerUp)
@@ -191,7 +199,7 @@
     const dy = e.clientY - s.y
     if (Math.abs(dx) < SWIPE_MIN || Math.abs(dx) < Math.abs(dy) * 1.8 || e.timeStamp - s.t > SWIPE_MAX_MS)
       return
-    onswipe(item.post.uri, dx < 0 ? -1 : 1) // swipe left → previous, right → next
+    onswipe?.(item.post.uri, dx < 0 ? -1 : 1) // swipe left → previous, right → next
   }
 
   function toggleReposter() {
@@ -294,6 +302,7 @@
   const profilePop = $derived(popPos(profileAnchor, profilePopH))
 
   function enterAvatar(e: MouseEvent) {
+    if (node) return // node mode: no profile popover (needs portaling out of the transform)
     clearTimeout(hoverTimer)
     if (showProfile) return // already open (pointer moved onto the popover) — hold it
     clearTimeout(profileOpenTimer)
@@ -322,7 +331,8 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="card"
-  style="left: {x}px; top: {top}px;"
+  class:node
+  style={node ? '' : `left: ${x}px; top: ${top}px;`}
   bind:clientHeight={cardH}
   onmouseenter={onkeep}
   onmouseleave={onleave}
@@ -401,7 +411,7 @@
       {:else}
         <div class="avatar avatar-blank"></div>
       {/if}
-      {#if showProfile}
+      {#if showProfile && !node}
         <div
           class="profile-pop"
           style="left: {profilePop.left}px; top: {profilePop.top}px"
@@ -569,9 +579,9 @@
   <!-- Foot row: Map replies. The private up/down vote moved up onto the action
        row (see actionRow's showVotes); the foot is only here when there's a
        thread to map. -->
-  {#if canMapReplies}
+  {#if canMapReplies && !node}
     <div class="foot">
-      <button class="map-replies" class:on={repliesMapped} onclick={() => onmapreplies(item)}>
+      <button class="map-replies" class:on={repliesMapped} onclick={() => onmapreplies?.(item)}>
         {repliesMapped ? 'Hide replies' : `Map replies${item.post.replyCount ? ` (${item.post.replyCount})` : ''}`}
       </button>
     </div>
@@ -632,14 +642,16 @@
       <span>{interactions.likeCount(p)}</span>
     </button>
 
-    <div class="more-wrap">
+    <!-- ⋯ menu is a fixed-position popover; in node mode it lands wrong inside
+         the graph transform, so hide it until it's portaled (a follow-up). -->
+    <div class="more-wrap" class:hidden={node}>
       <button
         class="act more"
         title="Report, mute or block"
         aria-label="More actions"
         onclick={(e) => toggleMore(e, p.post.uri)}>⋯</button
       >
-      {#if moreMenuFor === p.post.uri}
+      {#if moreMenuFor === p.post.uri && !node}
         <div
           class="menu floating"
           class:up={moreMenuUp}
@@ -719,6 +731,42 @@
     border-radius: 12px;
     padding: 0.8rem 0.9rem;
     box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  }
+  /* NODE MODE: fill the graph-node wrapper, scroll internally, slightly smaller.
+     The wrapper (PostNode) owns position, the ring, and the dismiss ✕. */
+  .card.node {
+    position: relative;
+    z-index: auto;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    box-shadow: none;
+    border-radius: 14px;
+    padding: 0.5rem 0.6rem;
+    touch-action: none; /* the graph pans; the card doesn't swipe in node mode */
+  }
+  .card.node .text {
+    font-size: 0.82rem;
+    line-height: 1.35;
+    margin-bottom: 0.4rem;
+  }
+  .card.node .name {
+    font-size: 0.82rem;
+  }
+  .card.node .handle {
+    font-size: 0.72rem;
+  }
+  .card.node .head {
+    gap: 0.4rem;
+    margin-bottom: 0.35rem;
+  }
+  .card.node .avatar {
+    width: 28px;
+    height: 28px;
+  }
+  .more-wrap.hidden {
+    display: none;
   }
   .repost {
     font-size: 0.72rem;

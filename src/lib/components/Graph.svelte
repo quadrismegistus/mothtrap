@@ -124,33 +124,36 @@
   // Every card is this tall regardless of its text, which wastes space on short
   // replies: that's the cue to move to VARIABLE height next (size each card to
   // its own content). Fixed-full first, so the reading itself can be judged.
-  const READER_H = 208
+  const READER_MAX_H = 340 // cap; a taller card scrolls internally (PostCard node)
   const readerPill = $derived({
     // Narrower than a "one-line-per-post" card: text wraps to more lines, so a
     // card reads a bit taller and less wide (a calmer column in the tree).
     w: Math.round(Math.min(300, Math.max(212, w - 40))),
-    h: READER_H,
+    h: READER_MAX_H,
     gap: { x: 22, y: 18 },
   })
-  // VARIABLE height: estimate a reader card's height from its text so the packer
-  // can give a short reply a short card and a full post a tall one. A cheap
-  // synchronous estimate (no DOM measure pass) — line count from the text width
-  // plus hard newlines, capped at the 300-char / 10-line ceiling, plus chrome
-  // (name row, padding, an embed-flag row). Errs slightly tall so text isn't
-  // clipped. READER_LINE_H tracks .wrap.reader .text (0.75rem × 1.32).
-  const READER_LINE_H = 17
+  // Estimate a lens card's height so the tree packer can size each node. It's a
+  // cheap synchronous guess (no DOM measure) — header + text lines + a bounded
+  // allowance for the embed PostCard renders inline + the action row — deliberately
+  // erring TALL and clamped to READER_MAX_H. The card's wrap is set to exactly
+  // this height and PostCard fills it (scrolling if content overruns), so the
+  // packer's assumption and the render match by construction: a low estimate just
+  // adds a scrollbar, a high one a little bottom air — never an overlap.
   function readerCardHeight(item: FeedItem): number {
     const rec = item.post.record
     const text = AppBskyFeedPost.isRecord(rec) ? rec.text.trim() : ''
-    const textW = readerPill.w - 30 - 8 - 22 // minus avatar, gap, padding
-    const cpl = Math.max(10, Math.floor(textW / 7.2)) // ~chars per line at 0.8rem
+    const textW = readerPill.w - 24 // padding
+    const cpl = Math.max(12, Math.floor(textW / 6.8)) // ~chars per line at 0.82rem
     let lines = 0
     for (const para of (text || ' ').split('\n')) lines += Math.max(1, Math.ceil(para.length / cpl))
-    lines = Math.min(lines, 10) // matches the CSS clamp / a full 300-char post
-    // chrome: name row + gaps + padding + the always-on action row (+ a flag row
-    // for embeds). The action row is why a reader card is a little taller now.
-    const chrome = 14 + 6 + 18 + 36 + (item.post.embed ? 18 : 0)
-    return Math.round(Math.max(78, chrome + lines * READER_LINE_H))
+    const t = (item.post.embed as { $type?: string } | undefined)?.$type ?? ''
+    let embed = 0
+    if (t.includes('recordWithMedia')) embed = 176 + 96
+    else if (t.includes('images') || t.includes('video')) embed = 176
+    else if (t.includes('record')) embed = 100
+    else if (t.includes('external')) embed = 84
+    const chrome = 42 /*header*/ + 36 /*actions*/ + 22 /*padding*/
+    return Math.round(Math.min(READER_MAX_H, Math.max(96, chrome + lines * 18 + embed)))
   }
   /**
    * The reservoir: how far the world extends past each edge of the frame, and
@@ -899,7 +902,7 @@
   const readerBoxByUri = $derived.by(() => {
     const m = new Map<string, { w: number; h: number }>()
     if (!lensTree) return m
-    for (const [uri, t] of lensTree) m.set(uri, { w: readerPill.w, h: (t.hh ?? READER_H / 2) * 2 })
+    for (const [uri, t] of lensTree) m.set(uri, { w: readerPill.w, h: (t.hh ?? READER_MAX_H / 2) * 2 })
     return m
   })
 

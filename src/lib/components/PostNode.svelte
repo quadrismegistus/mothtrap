@@ -4,7 +4,7 @@
   import type { FeedItem } from '../api/timeline'
   import { authorName, reposterProfile } from '../api/post'
   import { moderation } from '../state/moderation.svelte'
-  import PostActions from './PostActions.svelte'
+  import PostCard from './PostCard.svelte'
 
   interface Props {
     node: GraphNode
@@ -109,27 +109,6 @@
     const text = AppBskyFeedPost.isRecord(rec) ? rec.text.trim() : ''
     return text.length > 160 ? text.slice(0, 160) + '…' : text
   })
-  // Reader mode wants the whole post (Bluesky caps at 300); CSS line-clamps and
-  // fades where a long one overruns the card, hinting "hover for the rest".
-  const fullText = $derived.by(() => {
-    const rec = node.item.post.record
-    return AppBskyFeedPost.isRecord(rec) ? rec.text.trim() : ''
-  })
-  // What the reader card can't show inline — flagged so the reader knows to hover.
-  // Matches the embed VIEW $type (recordWithMedia counts as a quote).
-  const embedFlag = $derived.by(() => {
-    const t = (node.item.post.embed as { $type?: string } | undefined)?.$type
-    if (!t) return null
-    return {
-      image: t.includes('images'),
-      video: t.includes('video'),
-      quote: t.includes('record'),
-      link: t.includes('external'),
-    }
-  })
-  const hasEmbedFlag = $derived(
-    !!embedFlag && (embedFlag.image || embedFlag.video || embedFlag.quote || embedFlag.link),
-  )
   const repost = $derived(reposterProfile(node.item))
   // A node is too small to explain itself: it only signals "covered". The
   // reason and the way in live on the card, which has room for both.
@@ -155,7 +134,9 @@
   let lastPointerType = 'mouse'
 
   function onContextMenu(e: MouseEvent) {
-    if (lastPointerType !== 'mouse') return
+    // Reader cards are full PostCards — leave right-click to the browser (select
+    // / copy text) rather than dismissing the thread.
+    if (reader || lastPointerType !== 'mouse') return
     e.preventDefault() // no browser menu over the graph
     e.stopPropagation()
     // Ghosts are ancestors resurrected for context and were already dismissed;
@@ -167,6 +148,9 @@
     lastPointerType = e.pointerType
     if (e.button !== 0) return
     dragMoved = false
+    // Reader cards don't drag — the wrap is fixed by the tree, and a drag would
+    // fight text selection / the card's own scroll.
+    if (reader) return
     // Mouse only: drag to reposition. On touch a node does nothing on pointer-
     // down — a tap opens the card (onclick), and the triage swipe lives on the
     // CARD now (the node is covered by the card on a phone, and up/down there
@@ -219,48 +203,52 @@
       {/if}
     </span>
   {/if}
-  <button
-    class="node"
-    class:replies={hasReplies}
-    class:covered={cover.blur}
-    aria-label={cover.blur ? `${authorName(node.item)} — ${cover.reason}` : authorName(node.item)}
-    onclick={() => !dragMoved && onclick(node)}
-    ondblclick={() => !dragMoved && ondblclick(node)}
-  >
-    <span class="face">
-      {#if avatar}
-        <img src={avatar} alt={authorName(node.item)} draggable="false" />
-      {:else}
-        <span class="initial">{authorName(node.item).charAt(0).toUpperCase()}</span>
-      {/if}
-      {#if cover.blur}
-        <span class="cover-mark" title={cover.reason} aria-hidden="true">⚠</span>
-      {/if}
-    </span>
-    {#if pill || reader}
-      <span class="say">
-        <span class="who">{authorName(node.item)}</span>
-        <!-- Covered posts stay covered here too: the pill would otherwise print
-             in plain text exactly what the blurred avatar is hiding. Reader mode
-             shows the whole post; pill mode the opening line. -->
-        <span class="text">{cover.blur ? cover.reason : reader ? fullText : preview}</span>
-        {#if reader && !cover.blur && hasEmbedFlag && embedFlag}
-          <span class="flags" aria-hidden="true">
-            {#if embedFlag.image}<span class="flag">🖼 image</span>{/if}
-            {#if embedFlag.video}<span class="flag">🎬 video</span>{/if}
-            {#if embedFlag.quote}<span class="flag">❝ quote</span>{/if}
-            {#if embedFlag.link}<span class="flag">🔗 link</span>{/if}
-          </span>
+  {#if reader}
+    <!-- Reader lens: the node IS a full post card (header, rich text, inline
+         images/quotes, action row) — the same PostCard used as a hover overlay,
+         in its node variant. The wrap owns position, the ring, and the ✕. -->
+    <PostCard
+      node
+      item={node.item}
+      onreply={(it) => onreply?.(it)}
+      onquote={(it) => onquote?.(it)}
+      onrate={(it, k) => onrate?.(it.post.uri, k)}
+    />
+  {:else}
+    <button
+      class="node"
+      class:replies={hasReplies}
+      class:covered={cover.blur}
+      aria-label={cover.blur ? `${authorName(node.item)} — ${cover.reason}` : authorName(node.item)}
+      onclick={() => !dragMoved && onclick(node)}
+      ondblclick={() => !dragMoved && ondblclick(node)}
+    >
+      <span class="face">
+        {#if avatar}
+          <img src={avatar} alt={authorName(node.item)} draggable="false" />
+        {:else}
+          <span class="initial">{authorName(node.item).charAt(0).toUpperCase()}</span>
+        {/if}
+        {#if cover.blur}
+          <span class="cover-mark" title={cover.reason} aria-hidden="true">⚠</span>
         {/if}
       </span>
-    {/if}
-  </button>
+      {#if pill}
+        <span class="say">
+          <span class="who">{authorName(node.item)}</span>
+          <!-- Covered posts stay covered here too: the pill would otherwise print
+               in plain text exactly what the blurred avatar is hiding. -->
+          <span class="text">{cover.blur ? cover.reason : preview}</span>
+        </span>
+      {/if}
+    </button>
+  {/if}
 
-  {#if isReply}
+  {#if isReply && !reader}
     <span class="reply-badge" title="This post is a reply">↩</span>
   {/if}
 
-  {#if reaction}
+  {#if reaction && !reader}
     <span
       class="reaction-badge {reaction}"
       title={reaction === 'up' ? 'You thumbed this up (private)' : 'You thumbed this down (private)'}
@@ -268,7 +256,7 @@
     >
   {/if}
 
-  {#if node.collapsedCount > 0}
+  {#if !reader && node.collapsedCount > 0}
     <button
       class="badge expand-badge"
       title="{node.collapsedCount} more in thread — click to expand"
@@ -276,7 +264,7 @@
       onclick={() => !dragMoved && onexpand(node)}
       >+{node.collapsedCount}</button
     >
-  {:else if node.run && node.run.length > 1}
+  {:else if !reader && node.run && node.run.length > 1}
     <span class="badge run-badge" title="{node.run.length} consecutive posts by this author — the card scrolls through them"
       >{node.run.length}≡</span
     >
@@ -286,24 +274,6 @@
     <button class="dismiss" title="Mark as read (dismiss)" aria-label="Dismiss" onclick={dismiss}>
       ✕
     </button>
-  {/if}
-
-  <!-- Reader-lens action row: the card IS the reading surface, so the full
-       action set (reply/repost/like with counts, ⋯, and the private up/down
-       vote) lives on it, always shown — no hover needed. Same component the
-       post card uses, so the style matches exactly. -->
-  {#if reader && !ghost && !cover.blur}
-    <div class="reader-actions">
-      <PostActions
-        item={node.item}
-        showVotes
-        vote={reaction}
-        menuFixed={false}
-        onreply={(it) => onreply?.(it)}
-        onquote={(it) => onquote?.(it)}
-        onvote={(it, kind) => onrate?.(it.post.uri, kind)}
-      />
-    </div>
   {/if}
 </div>
 
@@ -521,93 +491,23 @@
   }
 
   /* ---- Reader lens ------------------------------------------------------
-     Inside the focus lens each node is a full-text card: read the thread
-     without hovering. Rectangular (not a capsule), avatar top-left, text
-     filling the box and clamping where a rare long post overruns. These rules
-     follow .wrap.pill (equal specificity) so they win on source order. */
-  /* Reader card: the WRAP is the visual card (border, bg, rounded corners) so the
-     action row sits INSIDE it, below the text. The .node just holds avatar+text
-     and goes transparent/borderless; its state rings move to the wrap. */
+     Each lens node is a full PostCard (its `node` variant). The WRAP is just the
+     graph-node shell: it owns position/size, the state ring, and the ✕ — the
+     card's own border/background/scroll belong to PostCard. */
   .wrap.reader {
-    display: flex;
-    flex-direction: column;
-    box-sizing: border-box;
-    background: var(--bg-elev);
-    border: 2px solid var(--accent-topic, var(--border));
-    border-radius: 14px;
-  }
-  .wrap.reader .node {
-    align-items: flex-start;
-    gap: 8px;
-    padding: 9px 11px 7px;
-    border: none;
-    background: transparent;
-    border-radius: 0;
-    box-shadow: none;
-    height: auto;
-    flex: 1 1 auto;
-    min-height: 0;
+    border-radius: 14px; /* the ring below follows the card's corners */
   }
   .wrap.reader.thread {
-    border-color: var(--accent-topic, var(--accent));
-  }
-  .wrap.reader:hover {
-    border-color: var(--accent-topic, var(--accent-hover));
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-topic, var(--accent));
   }
   .wrap.reader.related {
-    border-color: var(--accent-topic, rgba(255, 255, 255, 0.75));
-    box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-topic, rgba(255, 255, 255, 0.45));
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-topic, rgba(255, 255, 255, 0.6));
   }
   .wrap.reader.pinned {
-    border-color: #e0a838;
     box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px #e0a838;
   }
   .wrap.reader.active {
-    border-color: #ffcf4a;
     box-shadow: 0 0 0 2px var(--bg), 0 0 0 5px #ffcf4a;
-  }
-  .wrap.reader .face {
-    flex: 0 0 30px;
-    width: 30px;
-    height: 30px;
-    margin-top: 1px;
-  }
-  .wrap.reader .say {
-    gap: 2px;
-    overflow: hidden;
-  }
-  .wrap.reader .who {
-    font-size: 0.7rem;
-  }
-  .wrap.reader .text {
-    font-size: 0.8rem;
-    line-height: 1.32;
-    /* High enough that a full 300-char post fits at this card width rather than
-       truncating; the fixed box height is the real bound. */
-    -webkit-line-clamp: 10;
-    line-clamp: 10;
-  }
-  .wrap.reader .flags {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    margin-top: 3px;
-  }
-  .wrap.reader .flag {
-    font-size: 0.56rem;
-    line-height: 1.5;
-    color: var(--text-dim);
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 0 6px;
-    white-space: nowrap;
-  }
-  /* The action row sits below the text, divided by a hairline. */
-  .reader-actions {
-    flex: none;
-    padding: 3px 7px 5px;
-    border-top: 1px solid var(--border);
   }
 
   .node {
