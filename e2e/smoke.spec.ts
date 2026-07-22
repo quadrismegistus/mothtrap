@@ -68,18 +68,17 @@ test('hover card like toggles the count', async ({ page }) => {
   await expect(likeCount).toHaveText(before)
 })
 
-test('dismiss backfills to keep the visible count', async ({ page }) => {
-  // The count is viewport-derived now (density, not a fixed limit); the
-  // invariant under test is that a dismissal BACKFILLS to hold whatever that
-  // count is, with no reply-chain context riding along beyond it.
-  await page.addInitScript(() => localStorage.setItem('skynets.settings', JSON.stringify({ v: 2, replyChains: false })))
+test('dismiss drains the visible count (batch model)', async ({ page }) => {
+  // A batch is laid out once and only DRAINS as you dismiss — it does not
+  // backfill until it empties (then it refills from what's waiting). So a single
+  // dismissal leaves strictly fewer nodes on screen.
   await graphReady(page)
   const before = await page.locator('button.node').count()
   expect(before).toBeGreaterThan(0)
   await page.locator('.wrap').first().hover()
   await page.keyboard.press('d')
   await page.waitForTimeout(800)
-  expect(await page.locator('button.node').count()).toBe(before)
+  expect(await page.locator('button.node').count()).toBeLessThan(before)
 })
 
 test('composing a post closes the modal', async ({ page }) => {
@@ -173,9 +172,12 @@ test('a labeled post is covered on both node and card until revealed', async ({ 
 
 test('the ⋯ menu offers report, mute and block; blocking hides the author', async ({ page }) => {
   await graphReady(page)
-  await page.locator('.wrap').first().click() // pin so the card survives
+  await page.locator('.wrap').first().hover()
+  await page.locator('.card').waitFor()
+  await page.locator('.card').hover() // keep the hover card alive
   await page.locator('.card .act.more').first().click()
-  const menu = page.locator('.card .menu')
+  // The ⋯ menu is portaled to <body> (fixed position, out of the graph transform).
+  const menu = page.locator('.menu.floating')
   await expect(menu.getByText('Report post')).toBeVisible()
   await expect(menu.getByText(/^Mute @/)).toBeVisible()
   await expect(menu.getByText(/^Block @/)).toBeVisible()
@@ -194,43 +196,36 @@ test('the ⋯ menu offers report, mute and block; blocking hides the author', as
 test('blocking an author removes their posts from the graph at once', async ({ page }) => {
   await graphReady(page)
   const before = await page.locator('button.node').count()
-  await page.locator('.wrap').first().click()
+  await page.locator('.wrap').first().hover()
+  await page.locator('.card').waitFor()
+  await page.locator('.card').hover()
   const handle = await page.locator('.card .handle').first().innerText()
   await page.locator('.card .act.more').first().click()
-  await page.locator('.card .menu').getByText(/^Block @/).click()
+  await page.locator('.menu.floating').getByText(/^Block @/).click()
   // No refetch: the optimistic overlay has to suppress the author immediately.
   await expect(page.locator(`.card .handle:has-text("${handle.trim()}")`)).toHaveCount(0)
   expect(await page.locator('button.node').count()).toBeLessThanOrEqual(before)
 })
 
-test('single-click pins a node and keeps its card shown', async ({ page }) => {
+test('single-click a thread post opens the thread lens', async ({ page }) => {
+  // Click-to-pin is retired: a click now opens the focus lens (the tidy-tree
+  // thread view), whose members render as full reader cards (.wrap.reader).
   await graphReady(page)
-  await page.locator('.wrap').first().click()
-  await expect(page.locator('.wrap.pinned')).toHaveCount(1)
-  // Move the pointer away; the pinned post's card stays displayed.
-  await page.mouse.move(5, 5)
-  await page.waitForTimeout(400)
-  await expect(page.locator('.card')).toHaveCount(1)
+  await page.locator('.wrap.thread').first().click()
+  await expect(page.locator('.wrap.reader').first()).toBeVisible({ timeout: 4000 })
 })
 
-test('Map replies expands a thread with edges', async ({ page }) => {
+test('"View thread" opens the thread lens', async ({ page }) => {
   await graphReady(page)
   const thread = page.locator('.wrap.thread').first()
   await thread.hover()
   await page.locator('.card').waitFor()
   await page.locator('.card').hover()
   const btn = page.locator('.map-replies')
-  // Before mapping, the button must offer to MAP — its label has to match what
-  // clicking does, even for planner-selected 'full' posts, which used to read
-  // "Hide replies" while a click SHOWED them (#52).
-  await expect(btn).toHaveText(/Map replies/)
+  // The button opens the thread view now (it no longer expands replies inline).
+  await expect(btn).toHaveText(/View thread/)
   await btn.click()
-  // Round-trip: the click added this post to the user's expand set, so the
-  // label flips to offer the reverse action — the label now tracks that set in
-  // both directions, which is the substance of #52.
-  await expect(btn).toHaveText('Hide replies')
-  await page.waitForTimeout(800)
-  expect(await page.locator('.edges path').count()).toBeGreaterThan(0)
+  await expect(page.locator('.wrap.reader').first()).toBeVisible({ timeout: 4000 })
 })
 
 test('follow button toggles; unfollowing prunes the author from the graph', async ({ page }) => {
@@ -255,7 +250,7 @@ test('follow button toggles; unfollowing prunes the author from the graph', asyn
   }
 })
 
-test('dragging moves a node without pinning; a click pins it', async ({ page }) => {
+test('dragging moves a node; releasing does not pin it', async ({ page }) => {
   await graphReady(page)
   // Use the rightmost node: its hover card opens away from it (or flips left),
   // so the card never covers the node center we need to grab.
@@ -280,29 +275,8 @@ test('dragging moves a node without pinning; a click pins it', async ({ page }) 
   const dist = Math.hypot(held.x - before.x, held.y - before.y)
   expect(dist).toBeGreaterThan(60)
   await page.mouse.up()
-  // Releasing does NOT pin it.
+  // Releasing does NOT pin it — pin is retired; nothing in the scatter pins now.
   await expect(node).not.toHaveClass(/pinned/)
-  // A normal click pins it. Click the node locator (not stale coordinates):
-  // Playwright waits for the node to settle back from the drag before clicking,
-  // so the stronger axis snap-back can't slide it out from under the cursor.
-  await node.click()
-  await expect(node).toHaveClass(/pinned/)
-})
-
-test('Reply chains is on by default; turning it off collapses the chain', async ({ page }) => {
-  // Max density so the demo thread's whole chain clears the viewport-derived
-  // budget at the CI viewport (viewport-dependent — see the repost test's note).
-  await page.addInitScript(() => localStorage.setItem('skynets.settings', JSON.stringify({ v: 2, density: 2.5 })))
-  await graphReady(page)
-  const edgesBefore = await page.locator('.edges path').count()
-  await page.locator('.gear').click()
-  const box = page.locator('.config .row', { hasText: 'Reply chains' }).locator('input')
-  await expect(box).toBeChecked() // the new default
-  await box.uncheck()
-  await page.mouse.click(650, 400) // close config
-  await page.waitForTimeout(1200)
-  // The 5-post demo thread collapses back to one node → fewer edges.
-  expect(await page.locator('.edges path').count()).toBeLessThan(edgesBefore)
 })
 
 test('a previously-dismissed ancestor returns as a dimmed ghost for its chain', async ({ page }) => {
@@ -480,7 +454,8 @@ test('hovering the reposter name opens a profile preview', async ({ page }) => {
   await page.locator('.card').waitFor()
   await page.locator('.card').hover()
   await page.locator('.rt-name').first().hover()
-  await expect(page.locator('.rt-name .profile-hover')).toBeVisible()
+  // The preview is portaled to <body> now, so it's no longer inside .rt-name.
+  await expect(page.locator('.profile-hover')).toBeVisible()
 })
 
 test('a mutual is marked "follows you" on its card', async ({ page }) => {

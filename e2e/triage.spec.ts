@@ -12,7 +12,7 @@ import { test, expect, type Page } from '@playwright/test'
  *
  * The rate itself is private and on-device, so it isn't observable from the DOM;
  * these tests assert its side effects instead — the post is dismissed (and the
- * viewport-derived count BACKFILLS to hold, exactly as the smoke `d` test does),
+ * batch DRAINS, so the visible count drops, exactly as the smoke `d` test does),
  * the reaction later surfaces in the reactions panel, and the selection advances.
  */
 
@@ -24,31 +24,21 @@ async function graphReady(page: Page) {
   await page.waitForTimeout(1200) // let the force layout settle
 }
 
-/** Turn reply chains off so a single dismissal backfills 1-for-1 and the visible
- *  count is a clean invariant — the same setup the smoke `d` test relies on. */
-async function noReplyChains(page: Page) {
-  await page.addInitScript(() =>
-    localStorage.setItem('skynets.settings', JSON.stringify({ v: 2, replyChains: false })),
-  )
-}
-
 // The rate keys all funnel through rateAndAdvance → react (records a private
-// thumb) + dismiss + advance. The rate is invisible, but the dismiss BACKFILLS
-// to keep whatever the viewport-derived count is — the same invariant the smoke
-// `d` test asserts. Cover each documented key/alias with that invariant.
+// thumb) + dismiss + advance. The rate is invisible, but the dismiss removes the
+// post: the batch DRAINS (no backfill until it empties), so the visible count
+// drops — the same invariant the smoke `d` test asserts. Cover each key/alias.
 for (const key of ['f', 's', 'y', 'n', 'ArrowUp', 'ArrowDown']) {
-  test(`rate key ${key} dismisses the hovered post and backfills the count`, async ({ page }) => {
-    await noReplyChains(page)
+  test(`rate key ${key} dismisses the hovered post and drains the count`, async ({ page }) => {
     await graphReady(page)
     const before = await page.locator('button.node').count()
     expect(before).toBeGreaterThan(0)
     await page.locator('.wrap').first().hover()
     await page.keyboard.press(key)
     await page.waitForTimeout(800)
-    // Rate + dismiss removed the post; a backfill holds the count. (A no-op — e.g.
-    // the key not landing on the hovered post — would leave a stale higher/lower
-    // count only if backfill failed; the point is the count survives the dismiss.)
-    expect(await page.locator('button.node').count()).toBe(before)
+    // Rate + dismiss removed the post (and its reply subtree), so the batch has
+    // fewer nodes — it drains rather than backfilling.
+    expect(await page.locator('button.node').count()).toBeLessThan(before)
   })
 }
 
