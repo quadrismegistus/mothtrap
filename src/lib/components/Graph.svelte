@@ -1331,14 +1331,33 @@
       // frame or waste a draw off it.
       .filter((e) => !lensTree || (lensKeptUris.has(e.from) && lensKeptUris.has(e.to)))
       .map((e) => {
-        const a = placedByUri.get(e.from) // reply
+        const a = placedByUri.get(e.from) // reply (child)
         const b = placedByUri.get(e.to) // parent
         if (!a || !b) return null
-        const dx = b.px - a.px
-        const dy = b.py - a.py
-        const len = Math.hypot(dx, dy) || 1
-        const ux = dx / len
-        const uy = dy / len
+        let d: string
+        if (lensTree) {
+          // Reader tree: the parent sits ABOVE its reply, so connect the reply's
+          // TOP-centre to the parent's BOTTOM-centre. The edge runs in the gap
+          // between the cards, never behind one — so a transparent (dismissed)
+          // card no longer shows the line straight through it.
+          const ah = lensTree.get(e.from)?.hh ?? a.size / 2
+          const bh = lensTree.get(e.to)?.hh ?? b.size / 2
+          d = curvePath(a.px, a.py - ah, b.px, b.py + bh + 4, settings.curvedEdges ? 0.14 : 0, 36)
+        } else {
+          // Scatter: no tree orientation, so trim radially toward the parent.
+          const dx = b.px - a.px
+          const dy = b.py - a.py
+          const len = Math.hypot(dx, dy) || 1
+          const ux = dx / len
+          const uy = dy / len
+          d = curvePath(
+            a.px + ux * (a.size / 2),
+            a.py + uy * (a.size / 2),
+            b.px - ux * (b.size / 2 + 7),
+            b.py - uy * (b.size / 2 + 7),
+            settings.curvedEdges ? 0.24 : 0,
+          )
+        }
         return {
           id: e.id,
           from: e.from,
@@ -1349,13 +1368,7 @@
             (hoveredChain.size > 1 && (hoveredChain.has(e.from) || hoveredChain.has(e.to))) ||
             (lensUris !== null && (lensUris.has(e.from) || lensUris.has(e.to))),
           color: topicColorByNode.get(e.from) ?? '',
-          d: curvePath(
-            a.px + ux * (a.size / 2),
-            a.py + uy * (a.size / 2),
-            b.px - ux * (b.size / 2 + 7),
-            b.py - uy * (b.size / 2 + 7),
-            settings.curvedEdges ? 0.24 : 0,
-          ),
+          d,
         }
       })
       .filter((l): l is NonNullable<typeof l> => l !== null),
@@ -2571,13 +2584,14 @@
         style={line.color ? `stroke: ${line.color};` : ''}
       />
     {/each}
-    <!-- Faint connector from a capped post down to its "+K more" node. -->
+    <!-- Faint connector from a capped post's bottom-centre down to its "+K more"
+         node (not from its centre, so it doesn't run behind the card). -->
     {#each overflowPlaced as o (o.id)}
       {@const par = placedByUri.get(o.parent)}
       {#if par}
         <path
           class="more-edge"
-          d={curvePath(par.px, par.py, o.px, o.py, settings.curvedEdges ? 0.2 : 0, 30)}
+          d={curvePath(par.px, par.py + (lensTree?.get(o.parent)?.hh ?? 0), o.px, o.py, settings.curvedEdges ? 0.14 : 0, 30)}
           fill="none"
         />
       {/if}
