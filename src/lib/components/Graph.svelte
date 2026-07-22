@@ -610,6 +610,13 @@
     const c = convos.find((c) => c.id === focusedThread)
     if (!c) return null
     const s = new Set(c.members.map((m) => displayNodeOf(m.post.uri)))
+    // Pull in any on-map node belonging to the SAME fetched thread — above all
+    // GHOSTS of already-dismissed ancestors. Those aren't in `convos` (it's built
+    // from the non-dismissed `visible`), so without this the ghost stays a
+    // scatter node, gets exiled off-frame with everyone else, and leaves its
+    // reply's edge dangling to nowhere (the off-screen line). It belongs IN the
+    // tree, dimmed — the scatter already resurrects it for exactly this reason.
+    if (lensThreadUris.size) for (const n of visibleNodes) if (lensThreadUris.has(n.uri)) s.add(n.uri)
     return s.size ? s : null
   })
 
@@ -645,16 +652,20 @@
       stale = true
     }
   })
-  // Guests = fetched posts not already on the map (as a node, or covered by a
-  // collapsed rep) and not dismissed — so dismissing a guest removes it live.
+  // Every uri in the fetched thread — the structural truth the lens draws from
+  // (ancestors and branches your feed dropped, and members you'd dismissed).
+  const lensThreadUris = $derived(new Set(lensGuests.map((i) => i.post.uri)))
+  // Guests = fetched thread posts not already on the map (as a node, or covered
+  // by a collapsed rep). Posts you'd already DISMISSED come in too, as ghosts —
+  // so the tree stays whole (mirrors the scatter's resurrected-ancestor ghosts)
+  // rather than dropping a member and dangling its edge off-frame.
   const guestNodes = $derived.by(() => {
     if (!focusMembers || lensGuests.length === 0) return [] as GraphNode[]
     const out: GraphNode[] = []
     for (const it of lensGuests) {
       const u = it.post.uri
-      if (read.isDismissed(u)) continue
       if (visibleUris.has(u) || graph.memberNode.has(u)) continue
-      out.push(contextNode(it, false))
+      out.push(contextNode(it, read.isDismissed(u)))
     }
     return out
   })
