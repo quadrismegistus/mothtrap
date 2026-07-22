@@ -488,6 +488,7 @@
   const visibleNodes = $derived.by(() => {
     const set = new Map<string, GraphNode>()
     const seatedRep = new Set<string>()
+    const repUris = new Set<string>()
     for (const n of graph.nodes) {
       if (plannedFullUris.has(n.uri)) {
         set.set(n.uri, n)
@@ -497,6 +498,7 @@
       if (convoId && !seatedRep.has(convoId)) {
         seatedRep.add(convoId)
         set.set(n.uri, n) // one node per rep-planned conversation
+        repUris.add(n.uri)
       }
     }
     // Pinned nodes stay visible regardless of what the plan rotates out.
@@ -532,6 +534,24 @@
         heldMemberUris.has(a.uri) ||
         (settings.hideMutedReplies && moderation.isSilenced(a.item.post.author))
       climbChain(starts, set, parentNodeOf, prune)
+    }
+    // POINTS-LENS era: the FULL thread lives in the lens now, so the scatter
+    // keeps each feed post (plus reps/pinned/mapped) and only its IMMEDIATE
+    // parent — not the deep ancestry the climb/plan pulls in. Turn on "reply
+    // chains" for the old full-chain behaviour. The lens fetches its own thread,
+    // so this doesn't shorten what you see there.
+    if (!settings.replyChains) {
+      const present = new Set(set.keys())
+      const keep = new Set<string>()
+      for (const n of set.values()) {
+        if (!(primaryUris.has(n.uri) || repUris.has(n.uri) || pinned.has(n.uri) || expanded.has(n.uri)))
+          continue
+        keep.add(n.uri)
+        const raw = parentUriOf(n.item)
+        const p = raw ? graph.memberNode.get(raw) ?? raw : undefined // its display-parent
+        if (p && p !== n.uri && present.has(p)) keep.add(p)
+      }
+      return [...set.values()].filter((n) => keep.has(n.uri))
     }
     return [...set.values()]
   })
