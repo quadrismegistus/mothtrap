@@ -118,11 +118,16 @@
   // clamped to the frame so it still fits a phone. Media/quote posts can't be
   // read inline, so PostNode flags them and their hover-card still pops. This is
   // the lens's own node size, independent of the scatter's avatar/pill choice.
-  const READER_H = 132
+  // Tall enough to show a full-length post (Bluesky caps at 300 chars) without
+  // truncation on a desktop-width card — ~7 lines at this width, headroom to 10.
+  // Every card is this tall regardless of its text, which wastes space on short
+  // replies: that's the cue to move to VARIABLE height next (size each card to
+  // its own content). Fixed-full first, so the reading itself can be judged.
+  const READER_H = 208
   const readerPill = $derived({
-    w: Math.round(Math.min(324, Math.max(212, w - 40))),
+    w: Math.round(Math.min(360, Math.max(220, w - 40))),
     h: READER_H,
-    gap: { x: 26, y: 20 },
+    gap: { x: 24, y: 18 },
   })
   /**
    * The reservoir: how far the world extends past each edge of the frame, and

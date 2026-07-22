@@ -518,8 +518,10 @@
   .wrap.reader .text {
     font-size: 0.75rem;
     line-height: 1.32;
-    -webkit-line-clamp: 5;
-    line-clamp: 5;
+    /* High enough that a full 300-char post fits at this card width rather than
+       truncating; the fixed box height is the real bound. */
+    -webkit-line-clamp: 10;
+    line-clamp: 10;
   }
   .wrap.reader .flags {
     display: flex;
