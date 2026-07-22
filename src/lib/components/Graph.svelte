@@ -145,8 +145,10 @@
     let lines = 0
     for (const para of (text || ' ').split('\n')) lines += Math.max(1, Math.ceil(para.length / cpl))
     lines = Math.min(lines, 10) // matches the CSS clamp / a full 300-char post
-    const chrome = 14 /*name*/ + 6 /*gaps*/ + 18 /*padding*/ + (item.post.embed ? 18 : 0)
-    return Math.round(Math.max(52, chrome + lines * READER_LINE_H))
+    // chrome: name row + gaps + padding + the always-on action row (+ a flag row
+    // for embeds). The action row is why a reader card is a little taller now.
+    const chrome = 14 + 6 + 18 + 36 + (item.post.embed ? 18 : 0)
+    return Math.round(Math.max(78, chrome + lines * READER_LINE_H))
   }
   /**
    * The reservoir: how far the world extends past each edge of the frame, and
@@ -2519,6 +2521,17 @@
         style={line.color ? `stroke: ${line.color};` : ''}
       />
     {/each}
+    <!-- Faint connector from a capped post down to its "+K more" node. -->
+    {#each overflowPlaced as o (o.id)}
+      {@const par = placedByUri.get(o.parent)}
+      {#if par}
+        <path
+          class="more-edge"
+          d={curvePath(par.px, par.py, o.px, o.py, settings.curvedEdges ? 0.2 : 0, 30)}
+          fill="none"
+        />
+      {/if}
+    {/each}
   </svg>
 
   <!-- Topic edges: each conversation's node links to its member posts. -->
@@ -2561,8 +2574,8 @@
       ondismiss={dismiss}
       ondragmove={onNodeDrag}
       ondragend={onNodeDragEnd}
-      onreply={(n) => compose.openReply(n.item)}
-      onquote={(n) => compose.openQuote(n.item)}
+      onreply={(it) => compose.openReply(it)}
+      onquote={(it) => compose.openQuote(it)}
       onrate={rateOnly}
     />
   {/each}
@@ -3041,6 +3054,12 @@
   }
   .edges path.lit {
     opacity: 0.95;
+  }
+  /* Sibling-cap connector: fainter and finer than a reply edge, no arrowhead. */
+  .edges path.more-edge {
+    stroke-width: 1.5;
+    opacity: 0.4;
+    stroke-dasharray: 2 3;
   }
   /* Arrowheads: default gray; colored markers carry an inline fill that must
      win, so keep this on the low-specificity default only. */

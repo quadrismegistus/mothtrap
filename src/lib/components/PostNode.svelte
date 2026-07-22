@@ -1,8 +1,10 @@
 <script lang="ts">
   import { AppBskyFeedPost } from '@atproto/api'
   import type { GraphNode } from '../state/graph'
+  import type { FeedItem } from '../api/timeline'
   import { authorName, reposterProfile } from '../api/post'
   import { moderation } from '../state/moderation.svelte'
+  import PostActions from './PostActions.svelte'
 
   interface Props {
     node: GraphNode
@@ -42,10 +44,11 @@
     ondismiss: (uri: string) => void
     ondragmove: (uri: string, clientX: number, clientY: number) => void
     ondragend: (uri: string) => void
-    /** Reader-lens inline actions (shown on hover; the card is the read surface,
-     * so its actions live on it rather than on a popped card). */
-    onreply?: (node: GraphNode) => void
-    onquote?: (node: GraphNode) => void
+    /** Reader-lens inline actions: the card IS the read surface, so its action
+     * row (reply/repost/like/⋯ + private vote) lives on it rather than on a
+     * popped card. */
+    onreply?: (item: FeedItem) => void
+    onquote?: (item: FeedItem) => void
     onrate?: (uri: string, kind: 'up' | 'down') => void
   }
   let {
@@ -285,21 +288,20 @@
     </button>
   {/if}
 
-  <!-- Reader-lens actions: the card IS the reading surface (no popped card for
-       pure text), so reply/quote/rate live on it, revealed on hover. Media/quote
-       cards keep popping the full card, which carries these already. -->
-  {#if reader && !hasEmbedFlag && !ghost && !cover.blur}
-    <div
-      class="actions"
-      role="toolbar"
-      tabindex="-1"
-      aria-label="Post actions"
-      onpointerdown={(e) => e.stopPropagation()}
-    >
-      <button title="Reply" aria-label="Reply" onclick={(e) => { e.stopPropagation(); onreply?.(node) }}>↩</button>
-      <button title="Quote" aria-label="Quote" onclick={(e) => { e.stopPropagation(); onquote?.(node) }}>❝</button>
-      <button title="Thumb up (private)" aria-label="Thumb up" onclick={(e) => { e.stopPropagation(); onrate?.(node.uri, 'up') }}>👍</button>
-      <button title="Thumb down (private)" aria-label="Thumb down" onclick={(e) => { e.stopPropagation(); onrate?.(node.uri, 'down') }}>👎</button>
+  <!-- Reader-lens action row: the card IS the reading surface, so the full
+       action set (reply/repost/like with counts, ⋯, and the private up/down
+       vote) lives on it, always shown — no hover needed. Same component the
+       post card uses, so the style matches exactly. -->
+  {#if reader && !ghost && !cover.blur}
+    <div class="reader-actions">
+      <PostActions
+        item={node.item}
+        showVotes
+        vote={reaction}
+        onreply={(it) => onreply?.(it)}
+        onquote={(it) => onquote?.(it)}
+        onvote={(it, kind) => onrate?.(it.post.uri, kind)}
+      />
     </div>
   {/if}
 </div>
@@ -522,11 +524,19 @@
      without hovering. Rectangular (not a capsule), avatar top-left, text
      filling the box and clamping where a rare long post overruns. These rules
      follow .wrap.pill (equal specificity) so they win on source order. */
+  /* Reader card is a column: avatar+text on top, the action row at the bottom. */
+  .wrap.reader {
+    display: flex;
+    flex-direction: column;
+  }
   .wrap.reader .node {
     align-items: flex-start;
     gap: 8px;
-    padding: 9px 11px;
+    padding: 9px 11px 7px;
     border-radius: 14px;
+    height: auto;
+    flex: 1 1 auto;
+    min-height: 0;
   }
   .wrap.reader .face {
     flex: 0 0 30px;
@@ -565,40 +575,11 @@
     padding: 0 6px;
     white-space: nowrap;
   }
-  /* Inline action bar, revealed on hover in the bottom-right of a reader card. */
-  .actions {
-    position: absolute;
-    bottom: 5px;
-    right: 7px;
-    display: none;
-    gap: 1px;
-    padding: 2px;
-    border-radius: 999px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    z-index: 40;
-  }
-  @media (hover: hover) {
-    .wrap.reader:hover .actions {
-      display: flex;
-    }
-  }
-  .actions button {
-    width: 22px;
-    height: 22px;
-    padding: 0;
-    border: none;
-    background: transparent;
-    border-radius: 50%;
-    font-size: 0.72rem;
-    line-height: 1;
-    display: grid;
-    place-items: center;
-    cursor: pointer;
-    color: var(--text-dim);
-  }
-  .actions button:hover {
-    background: var(--bg-elev);
+  /* The action row sits below the text, divided by a hairline. */
+  .reader-actions {
+    flex: none;
+    padding: 3px 7px 5px;
+    border-top: 1px solid var(--border);
   }
 
   .node {
