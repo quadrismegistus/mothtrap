@@ -210,12 +210,16 @@ test('blocking an author removes their posts from the graph at once', async ({ p
 test('single-click a thread post opens the thread lens', async ({ page }) => {
   // Click-to-pin is retired: a click now opens the focus lens (the tidy-tree
   // thread view), whose members render as full reader cards (.wrap.reader).
+  // Max density so the whole demo thread is on the map — the lens fetch is a
+  // no-op in demo mode, so it gathers the members already visible.
+  await page.addInitScript(() => localStorage.setItem('skynets.settings', JSON.stringify({ v: 2, density: 2.5 })))
   await graphReady(page)
   await page.locator('.wrap.thread').first().click()
   await expect(page.locator('.wrap.reader').first()).toBeVisible({ timeout: 4000 })
 })
 
 test('"View thread" opens the thread lens', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('skynets.settings', JSON.stringify({ v: 2, density: 2.5 })))
   await graphReady(page)
   const thread = page.locator('.wrap.thread').first()
   await thread.hover()
@@ -359,9 +363,10 @@ test('digest button opens the panel and annotates the graph (demo)', async ({ pa
   // The panel opens; with no API key a demo digest renders conversations.
   await expect(page.locator('.panel')).toBeVisible()
   await expect(page.locator('.convos > li').first()).toBeVisible()
-  // A conversation label is annotated onto the graph, and clicking an exemplar
-  // pins its node (pops a card).
-  await expect(page.locator('.topic-node').first()).toBeVisible()
+  // A conversation label is annotated onto the graph as a caption (topic hubs
+  // were retired in favour of per-post captions), and clicking an exemplar pins
+  // its node (pops a card).
+  await expect(page.locator('.node-caption').first()).toBeVisible({ timeout: 8000 })
   await page.locator('.convos .ex').first().click()
   await expect(page.locator('.wrap.pinned')).toHaveCount(1)
 })
@@ -390,34 +395,10 @@ test('continuous mode auto-establishes without pressing Update (demo)', async ({
   await expect(page.locator('.convos > li').first()).toBeVisible()
 })
 
-test('pressing D on a topic node dismisses its whole conversation', async ({ page }) => {
-  await graphReady(page)
-  await page.locator('.digest-btn').click()
-  await page.locator('.topic-node').first().waitFor()
-  await page.locator('.topic-node').first().hover()
-  await page.keyboard.press('d')
-  await page.waitForTimeout(500)
-  // Its member posts are marked read → the dismissed counter shows.
-  await expect(page.locator('.dismissed-count')).toBeVisible()
-})
-
-test('D still dismisses a post after dismissing a topic (no stuck hover)', async ({ page }) => {
-  await graphReady(page)
-  await page.locator('.digest-btn').click()
-  await page.locator('.topic-node').first().waitFor()
-  await page.locator('.topic-node').first().hover()
-  await page.keyboard.press('d') // dismiss the topic; the pill vanishes
-  await page.waitForTimeout(400)
-  const dismissed = async () =>
-    parseInt((await page.locator('.dismissed-count').innerText()).replace(/\D/g, ''), 10) || 0
-  const before = await dismissed()
-  // Dismiss a plain post with D — this used to be swallowed by the stale
-  // hoveredTopic (the topic branch of onKey kept winning). The counter must grow.
-  await page.locator('.wrap').first().hover()
-  await page.keyboard.press('d')
-  await page.waitForTimeout(600)
-  expect(await dismissed()).toBeGreaterThan(before)
-})
+// (Topic-hub tests removed: on-map topic pills (.topic-node) were retired in
+// favour of per-post captions, so pressing D on a topic node — and the stuck-
+// hover case it guarded — no longer have an affordance. Whole-conversation
+// dismissal now lives in the thread lens.)
 
 test('hovering a card avatar opens a profile preview', async ({ page }) => {
   await graphReady(page)
@@ -511,21 +492,8 @@ test('merge slider re-groups labels without re-labeling', async ({ page }) => {
   expect(after).toBeGreaterThanOrEqual(before)
 })
 
-test('clicking a topic pill reveals all its posts', async ({ page }) => {
-  await graphReady(page)
-  await page.locator('.digest-btn').click()
-  await page.locator('button.go').first().click()
-  const pill = page.locator('.topic-node').first()
-  await pill.waitFor({ timeout: 8000 })
-  const before = await page.locator('button.node').count()
-  await pill.click()
-  await expect(pill).toHaveClass(/revealed/)
-  // Its off-budget members come in, so the node count doesn't drop.
-  expect(await page.locator('button.node').count()).toBeGreaterThanOrEqual(before)
-  // Clicking again collapses the reveal.
-  await pill.click()
-  await expect(pill).not.toHaveClass(/revealed/)
-})
+// (Topic-pill reveal test removed: on-map topic pills (.topic-node) were retired
+// for per-post captions; the whole thread is reachable via the lens instead.)
 
 test('archive coverage view opens with a histogram', async ({ page }) => {
   await graphReady(page)

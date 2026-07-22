@@ -475,6 +475,16 @@
   $effect(() => {
     if (batch !== null && total === 0 && !loading) batch = null
   })
+  // Your OWN just-composed posts (and replies) must appear at once — they don't
+  // wait for the next batch the way polled/paged arrivals do. Fold them into the
+  // live batch. Value-guarded so it settles (no re-add once present).
+  $effect(() => {
+    if (batch === null) return
+    const b = batch
+    let added = false
+    for (const i of compose.injected) if (!b.has(i.post.uri)) (b.add(i.post.uri), (added = true))
+    if (added) batch = new Set(b)
+  })
 
   // Which nodes to show (top/recent/mix), plus pinned nodes and — when "connect
   // replies" is on — the present ancestor chain of each shown node, so a reply is
